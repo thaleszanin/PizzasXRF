@@ -1,0 +1,34 @@
+CATALOGADOR FRX — VERSÃO GENÉRICA (cópia congelada)
+====================================================
+
+Esta pasta é uma cópia EXATA do catalogador como ele estava em
+02/09/2026, antes de o banco de dados central de amostras entrar na
+versão principal (a que fica na raiz do repositório).
+
+Para que ela serve
+------------------
+Esta é a versão que continua sendo o catalogador GENÉRICO: separa
+majoritário e traço de QUALQUER tipo de amostra, sem saber de commodity,
+sem pastas e sem banco de dados. Carrega os .txt, classifica, desenha e
+salva — e nada mais. É a ferramenta certa quando a amostra não é madeira,
+carne ou soja e você só quer a distinção major/traço na hora.
+
+A versão da raiz (`E:\codigosthales\catalogador_frx.py`) é a que ganhou o
+banco de amostras com pastas e subpastas editáveis por commodity.
+
+Como rodar
+----------
+    python generico/catalogador_frx.py
+
+Os arquivos aqui dentro são independentes dos da raiz: rodando pelo
+caminho acima, o Python põe a pasta `generico/` na frente do caminho de
+busca, então `import catalogador` acha o pacote DESTA pasta, e não o da
+raiz. Dá para mexer numa versão sem afetar a outra.
+
+O que NÃO mudar aqui
+--------------------
+Nada, a princípio: esta cópia é o ponto de retorno. Se ela precisar
+evoluir (por exemplo, para atender a novos tipos de amostra genérica),
+mexa à vontade — mas as mudanças da versão com banco de dados não devem
+ser trazidas para cá, senão as duas viram a mesma coisa e o backup deixa
+de existir.
