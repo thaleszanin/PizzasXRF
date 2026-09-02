@@ -11,9 +11,13 @@ O que esse programa faz:
   4. Separa os elementos restantes em "majoritário" e "traço": ordena do
      menor pro maior e vai somando no grupo traço enquanto a soma
      acumulada não ultrapassar o limite escolhido no slider.
-  5. Desenha 3 gráficos de pizza por amostra: total, majoritários, traço.
+  5. Desenha 3 gráficos de pizza por amostra: total, majoritários, traço,
+     os três sempre do mesmo tamanho.
   6. Permite carregar um arquivo de mapeamento (código do arquivo -> nome
      real da amostra) e processar a batelada inteira de uma vez.
+  7. Salva o gráfico (.png) e a tabela (.txt) de cada amostra — uma a uma,
+     a batelada inteira em arquivos separados, ou tudo compilado num
+     arquivo só.
 
 Como rodar:
   1. Precisa de Python 3 instalado.
@@ -25,7 +29,7 @@ Como rodar:
 Onde está cada coisa
 --------------------
 Este arquivo é só a porta de entrada. O código de verdade está no
-pacote `catalogador/`, dividido em três pastas, uma por seção:
+pacote `catalogador/`, dividido por seção:
 
   catalogador/
     nucleo/        <- os DADOS (nenhuma interface, nenhum gráfico)
@@ -38,12 +42,15 @@ pacote `catalogador/`, dividido em três pastas, uma por seção:
       pizza.py              uma pizza com rótulos externos + linhas guia
       figura.py             as três pizzas de uma amostra, lado a lado
 
+    exportacao.py  <- o CONTEÚDO DOS ARQUIVOS salvos (.txt e .png
+                      compilado), sem saber onde eles vão parar
+
     interface/     <- a JANELA (Tkinter)
       app.py                botões, slider, cards e tabelas
 
-A dependência anda sempre num sentido só — interface -> graficos ->
-nucleo — então dá pra usar as camadas de baixo sozinhas. Para gerar
-imagens num script, sem abrir janela nenhuma:
+A dependência anda sempre num sentido só — interface -> exportacao ->
+graficos -> nucleo — então dá pra usar as camadas de baixo sozinhas.
+Para gerar imagens num script, sem abrir janela nenhuma:
 
     import matplotlib
     matplotlib.use("Agg")
