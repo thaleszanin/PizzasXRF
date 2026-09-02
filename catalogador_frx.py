@@ -18,6 +18,28 @@ O que esse programa faz:
   7. Salva o gráfico (.png) e a tabela (.txt) de cada amostra — uma a uma,
      a batelada inteira em arquivos separados, ou tudo compilado num
      arquivo só.
+  8. Guarda as amostras num BANCO CENTRAL, organizado em pastas e
+     subpastas que você cria e reorganiza à vontade (madeira > in natura
+     > pó, carne > cinza, e o que vier depois). O botão "Banco de
+     amostras…" abre a janela do banco: de lá dá para importar .txt para
+     dentro de uma pasta, arrastar amostras e pastas de um lugar para
+     outro, procurar por nome, e trazer de volta para a tela tudo o que
+     está numa pasta.
+
+Duas versões do programa
+------------------------
+  * esta, na raiz do repositório, é a que tem o banco de amostras;
+  * `generico/catalogador_frx.py` é a cópia congelada de antes do banco:
+     o catalogador GENÉRICO, que faz a distinção majoritário/traço de
+     qualquer tipo de amostra, sem pastas e sem commodity. As duas são
+     independentes e podem rodar ao mesmo tempo.
+
+Onde ficam as amostras guardadas
+--------------------------------
+Num arquivo só, `amostras.db` (SQLite), dentro da pasta "Catalogador FRX"
+no seu perfil de usuário. Fazer backup é copiar esse arquivo; para
+compartilhar o banco com o laboratório, é só apontar o programa para um
+arquivo numa pasta de rede ("Abrir outro…" na janela do banco).
 
 Como rodar:
   1. Precisa de Python 3 instalado.
@@ -37,6 +59,10 @@ pacote `catalogador/`, dividido por seção:
       leitura.py            parse_frx_file, parse_mapping
       classificacao.py      descarte de Ar/tubo e majoritário vs. traço
 
+    banco/         <- o BANCO das amostras (SQLite, nenhuma interface)
+      esquema.py            as tabelas e por que elas são assim
+      repositorio.py        criar/mover/apagar pasta, guardar amostra
+
     graficos/      <- o DESENHO (matplotlib, nenhum Tkinter)
       estilo.py             paleta de cores e tamanho da fonte
       pizza.py              uma pizza com rótulos externos + linhas guia
@@ -47,10 +73,19 @@ pacote `catalogador/`, dividido por seção:
 
     interface/     <- a JANELA (Tkinter)
       app.py                botões, slider, cards e tabelas
+      banco_view.py         a árvore de pastas do banco
 
 A dependência anda sempre num sentido só — interface -> exportacao ->
-graficos -> nucleo — então dá pra usar as camadas de baixo sozinhas.
-Para gerar imagens num script, sem abrir janela nenhuma:
+graficos -> nucleo, com `banco/` pendurado direto no núcleo — então dá
+pra usar as camadas de baixo sozinhas. Para mexer no banco num script:
+
+    from catalogador.banco import BancoDeAmostras, caminho_padrao
+
+    banco = BancoDeAmostras(caminho_padrao())
+    for amostra in banco.amostras(pasta_id, recursivo=True):
+        print(amostra["nome"], banco.elementos(amostra["id"]))
+
+E para gerar imagens num script, sem abrir janela nenhuma:
 
     import matplotlib
     matplotlib.use("Agg")

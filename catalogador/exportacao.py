@@ -66,16 +66,23 @@ def _tabela_alinhada(linhas):
     return saida
 
 
-def bloco_da_amostra(nome, codigo, linhas, total, limite, tubo, descartados):
+def bloco_da_amostra(nome, codigo, linhas, total, limite, tubo, descartados,
+                     pasta=None):
     """O texto completo da tabela de UMA amostra: um cabeçalho dizendo em
     que condições ela foi classificada, e a tabela em si.
 
     O cabeçalho não é enfeite — sem o limite do traço e o tubo, a coluna
-    "Grupo" não quer dizer nada seis meses depois.
+    "Grupo" não quer dizer nada seis meses depois. A `pasta` só aparece
+    quando a amostra veio do banco: é o caminho dela na árvore
+    ("Madeira / In natura / Pó"), que diz de que material é a medida.
     """
     cabecalho = [
         f"Amostra: {nome}",
         f"Arquivo: {codigo}",
+    ]
+    if pasta:
+        cabecalho.append(f"Pasta no banco: {pasta}")
+    cabecalho += [
         f"Tubo de raios X: {tubo}",
         f"Limite do grupo traço: {limite:.1f}%",
     ]

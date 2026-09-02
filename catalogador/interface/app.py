@@ -37,6 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from ..banco import BancoDeAmostras, ErroDoBanco, caminho_lembrado, lembrar_caminho
 from ..nucleo.leitura import parse_frx_file, parse_mapping
 from ..nucleo.classificacao import TUBE_OPTIONS, apply_exclusions, classify
 from ..graficos.figura import (FIG_DPI, FIG_SIZE, build_sample_figure,
@@ -44,6 +45,7 @@ from ..graficos.figura import (FIG_DPI, FIG_SIZE, build_sample_figure,
 from ..exportacao import (PilhaDeImagens, bloco_da_amostra, caminho_livre,
                           documento_compilado, escrever_texto, linhas_da_tabela,
                           nome_de_arquivo, pasta_da_exportacao)
+from .banco_view import BancoView
 
 # Altura reservada pro gráfico dentro do cartão. É fixa de propósito: o
 # cartão ocupa o mesmo espaço antes e depois de ser desenhado, então a
@@ -461,9 +463,16 @@ class App(tk.Tk):
         self.geometry("1400x820")
 
         # -------- estado da aplicação --------
-        self.samples = []          # [{"code": str, "elements": [...]}]
+        # Cada amostra é um dicionário {"code", "elements"} e, quando ela
+        # veio do banco, mais três chaves: "nome" (o nome de lá, que ganha
+        # do mapeamento), "tubo" (o tubo com que ela foi MEDIDA, que ganha
+        # do seletor da janela) e "pasta" (o caminho na árvore, que entra
+        # no cabeçalho da tabela exportada).
+        self.samples = []
         self.cards = []            # um SampleCard por amostra, na ordem
         self.name_mapping = {}     # {"081025af": "Madeira 123", ...}
+        self.banco = None          # aberto só quando alguém pede o banco
+        self.banco_view = None     # a janela do banco, quando está aberta
         self.threshold = 10.0
         self.tube_z = None
         self._render_after_id = None  # debounce do slider
@@ -495,6 +504,9 @@ class App(tk.Tk):
                 self.after_cancel(pendente)
             except tk.TclError:
                 pass
+        if self.banco is not None:
+            self.banco.fechar()
+            self.banco = None
         super().destroy()
 
     def _build_top_controls(self):
@@ -511,8 +523,10 @@ class App(tk.Tk):
                    command=self.load_samples).pack(side="left")
         ttk.Button(linha0, text="2. Carregar mapeamento (.csv/.txt)",
                    command=self.load_mapping).pack(side="left", padx=6)
+        ttk.Button(linha0, text="Banco de amostras…",
+                   command=self.abrir_banco).pack(side="left", padx=(6, 0))
         self.mapping_label = ttk.Label(linha0, text="Nenhum mapeamento carregado.")
-        self.mapping_label.pack(side="left", padx=(6, 0))
+        self.mapping_label.pack(side="left", padx=(12, 0))
 
         ttk.Label(frame, text="Tubo de raios X utilizado:").grid(row=1, column=0, sticky="w", pady=(12, 0))
         linha1 = ttk.Frame(frame)
@@ -744,7 +758,68 @@ class App(tk.Tk):
     # ---------- montagem de nomes ----------
 
     def display_name_for(self, sample):
+        """O nome que aparece no cartão e vira nome de arquivo.
+
+        Amostra que veio do banco já traz o nome dela — lá ele foi
+        escolhido de propósito, então ganha do mapeamento, que é um
+        apoio para quem abriu .txt solto.
+        """
+        if sample.get("nome"):
+            return sample["nome"]
         return self.name_mapping.get(sample["code"].lower(), sample["code"])
+
+    def tubo_da_amostra(self, sample):
+        """(conjunto de Z a descartar, nome do tubo) desta amostra.
+
+        O seletor da janela vale para as amostras abertas de um .txt
+        solto — ali ninguém sabe com que tubo elas foram medidas. Amostra
+        vinda do banco carrega o tubo dela, gravado na hora em que foi
+        guardada: numa batelada com medidas de tubos diferentes, cada uma
+        descarta o que tem que descartar.
+        """
+        nome = sample.get("tubo")
+        if nome in TUBE_OPTIONS:
+            return TUBE_OPTIONS[nome], nome
+        return self.tube_z, self.tube_var.get()
+
+    def _tubo_do_conjunto(self):
+        """O tubo para o cabeçalho de um arquivo com VÁRIAS amostras."""
+        nomes = {self.tubo_da_amostra(s)[1] for s in self.samples}
+        if len(nomes) == 1:
+            return nomes.pop()
+        return "vários — veja o cabeçalho de cada amostra"
+
+    # ---------- banco de amostras ----------
+
+    def abrir_banco(self):
+        """Abre (ou traz para a frente) a janela do banco de amostras."""
+        if self.banco_view is not None:
+            self.banco_view.deiconify()
+            self.banco_view.lift()
+            self.banco_view.focus_set()
+            return
+        if self.banco is None:
+            caminho = caminho_lembrado()
+            try:
+                self.banco = BancoDeAmostras(caminho)
+            except (ErroDoBanco, OSError) as erro:
+                messagebox.showerror("Banco de amostras",
+                                     "Não consegui abrir o banco:\n%s\n\n%s"
+                                     % (caminho, erro))
+                return
+            lembrar_caminho(caminho)
+        self.banco_view = BancoView(self, self.banco)
+
+    def carregar_do_banco(self, amostras):
+        """Põe na tela amostras vindas do banco, sem repetir as que já
+        estão abertas. Devolve quantas entraram de fato."""
+        ja_abertas = {s.get("banco_id") for s in self.samples}
+        novas = [a for a in amostras if a.get("banco_id") not in ja_abertas]
+        if not novas:
+            return 0
+        self.samples.extend(novas)
+        self._sync_cards()
+        return len(novas)
 
     # ---------- exportação ----------
 
@@ -752,7 +827,8 @@ class App(tk.Tk):
         """Classifica uma amostra com o tubo e o limite que estão valendo
         agora. É barato (milissegundos), então quem exporta recalcula em
         vez de depender do que o cartão tem guardado."""
-        kept, removed = apply_exclusions(sample["elements"], self.tube_z)
+        tubo_z, _ = self.tubo_da_amostra(sample)
+        kept, removed = apply_exclusions(sample["elements"], tubo_z)
         major, trace, total = classify(kept, self.threshold)
         return kept, removed, major, trace, total
 
@@ -771,8 +847,8 @@ class App(tk.Tk):
         return bloco_da_amostra(
             self.display_name_for(sample), sample["code"],
             linhas_da_tabela(major, trace, total), total,
-            self.threshold, self.tube_var.get(),
-            [e["symbol"] for e in removed])
+            self.threshold, self.tubo_da_amostra(sample)[1],
+            [e["symbol"] for e in removed], sample.get("pasta"))
 
     def export_all(self, modo):
         """Salva a batelada inteira. O `modo` diz o quê:
@@ -853,7 +929,8 @@ class App(tk.Tk):
             kept, removed, major, trace, total = self._dados_da_amostra(sample)
             bloco = bloco_da_amostra(
                 nome, sample["code"], linhas_da_tabela(major, trace, total), total,
-                self.threshold, self.tube_var.get(), [e["symbol"] for e in removed])
+                self.threshold, self.tubo_da_amostra(sample)[1],
+                [e["symbol"] for e in removed], sample.get("pasta"))
 
             fig = build_sample_figure(kept, major, trace, total, nome)
             try:
@@ -883,7 +960,8 @@ class App(tk.Tk):
         try:
             if estado["compilado"]:
                 texto = documento_compilado(estado["blocos"], self.threshold,
-                                            self.tube_var.get(), bool(self.name_mapping))
+                                            self._tubo_do_conjunto(),
+                                            bool(self.name_mapping))
                 estado["arquivos"].append(escrever_texto(
                     caminho_livre(estado["pasta"], "todas as amostras", ".txt"), texto))
                 estado["arquivos"].append(estado["pilha"].salvar(
@@ -992,7 +1070,9 @@ class App(tk.Tk):
         """Atualiza a parte barata de todos os cartões (nome, avisos,
         altura da tabela) e agenda o desenho dos que ficaram vencidos."""
         for card in self.cards:
-            card.update_data(self.tube_z, self.threshold, self.display_name_for(card.sample))
+            tubo_z, _ = self.tubo_da_amostra(card.sample)
+            card.update_data(tubo_z, self.threshold,
+                             self.display_name_for(card.sample))
         if desenhar:
             self._schedule_draw()
 
