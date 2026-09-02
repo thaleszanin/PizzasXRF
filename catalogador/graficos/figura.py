@@ -5,7 +5,7 @@ from matplotlib.figure import Figure
 
 from .estilo import TRACE_LUMP_COLOR
 from .cores import colors_for
-from .pizza import draw_pie_with_leaders, passos_da_pizza
+from .pizza import passos_da_pizza
 
 
 FIG_SIZE = (14, 4.4)

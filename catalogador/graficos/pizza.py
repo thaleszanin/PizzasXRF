@@ -3,6 +3,53 @@
 Este módulo é só o algoritmo de posicionamento dos rótulos — a parte
 mais delicada do programa. Ele não escolhe backend do matplotlib nem
 sabe o que é uma amostra: recebe um `ax` pronto e valores em %.
+
+O resultado: os rótulos (nome + %) ficam sempre do lado de fora,
+ligados à própria fatia por uma linha guia fina, e TODOS à mesma
+distância do centro (sem exceção).
+
+O texto e a linha guia são desenhados como dois elementos SEPARADOS
+(`ax.text` + `Line2D`) — não com `ax.annotate`, cuja caixa delimitadora
+inclui a seta inteira e não só o texto, o que torna qualquer medida de
+sobreposição sem sentido. Com o texto isolado, medimos a caixa *real*
+dele (em pixels, já considerando fonte/DPI de verdade) e:
+
+1. Agrupamos em "blocos" só os rótulos vizinhos que colidiriam na
+   posição natural deles (mais um passo de absorção: um bloco, ao
+   crescer, pode "engolir" o espaço de um vizinho que originalmente
+   não colidia — sem isso ele ficaria espremido fora da ordem).
+2. Um bloco com mais de 2 rótulos é dividido nos dois lados da pizza:
+   a metade mais ambígua (mais perto do topo/base, com X natural
+   pequeno) vai pro lado com menos membros; a metade que já é
+   claramente de um lado fica onde está. Isso reduz pela metade a
+   altura que cada lado precisa, deixando o bloco mais compacto — os
+   desvios podem ir tanto pra direita quanto pra esquerda, não só no
+   sentido horário.
+3. Cada metade é redistribuída em Y, simetricamente, em torno do
+   próprio centro natural — e, se a pilha ultrapassar o topo/base do
+   círculo dos rótulos, o bloco DESLIZA pra dentro dessa faixa (em
+   direção ao "equador" da pizza, onde sobra espaço vertical) em vez
+   de crescer pra fora. Sem isso, um punhado de fatias minúsculas no
+   topo empurrava o raio comum do passo 4 pra longe e afastava TODOS
+   os rótulos da pizza junto.
+4. Por fim, um raio ÚNICO é calculado — o maior que qualquer lado de
+   qualquer bloco precisar — e TODOS os rótulos (mesmo os isolados,
+   tipo fatias grandes que não colidem com nada) são projetados nesse
+   MESMO raio, mantendo o Y já calculado. Assim toda a pizza tem uma
+   "auréola" de rótulos a distância igual do centro, sem exceção, e
+   nenhum fica desnecessariamente mais longe que o mínimo que os
+   blocos mais cheios exigem.
+5. Empurramos cada rótulo horizontalmente (nunca no eixo vertical, que
+   é o que garante a separação entre eles) o mínimo necessário pra ele
+   nunca ficar por cima da pizza.
+6. Uma rede de segurança final, na ORDEM NATURAL das fatias (nunca
+   reordenada pela posição já ajustada — isso inverteria a ordem de
+   leitura dos rótulos), compara cada rótulo contra TODOS os já
+   posicionados antes dele (não só o anterior na lista).
+7. Reaplica o passo 5, já que o passo 6 pode ter mexido no Y de novo.
+8. Por fim, expande os limites do gráfico se algum rótulo tiver sido
+   empurrado pra além da margem padrão — senão ele pode ficar cortado
+   fora da figura.
 """
 
 import math
@@ -83,7 +130,7 @@ class RotulosDaPizza:
         Com ela, o eixo fica exatamente com esses limites.
 
         Devolve, sempre, os limites de que os rótulos PRECISARIAM. O
-        algoritmo em si está descrito em `draw_pie_with_leaders`.
+        algoritmo em si está descrito no cabeçalho deste módulo.
         """
         self._resetar()
         ax = self.ax
@@ -449,71 +496,13 @@ def _criar_pizza(ax, sizes, labels, colors, radius):
     return RotulosDaPizza(ax, texts, anchors, radius)
 
 
-def draw_pie_with_leaders(ax, sizes, labels, colors, radius=1.0):
-    """Desenha uma pizza com rótulos (nome + %) sempre do lado de fora,
-    ligados à própria fatia por uma linha guia fina, e TODOS à mesma
-    distância do centro (sem exceção).
-
-    O texto e a linha guia são desenhados como dois elementos SEPARADOS
-    (`ax.text` + `Line2D`) — não com `ax.annotate`, cuja caixa delimitadora
-    inclui a seta inteira e não só o texto, o que torna qualquer medida
-    de sobreposição sem sentido. Com o texto isolado, medimos a caixa
-    *real* dele (em pixels, já considerando fonte/DPI de verdade) e:
-
-    1. Agrupamos em "blocos" só os rótulos vizinhos que colidiriam na
-       posição natural deles (mais um passo de absorção: um bloco, ao
-       crescer, pode "engolir" o espaço de um vizinho que originalmente
-       não colidia — sem isso ele ficaria espremido fora da ordem).
-    2. Um bloco com mais de 2 rótulos é dividido nos dois lados da
-       pizza: a metade mais ambígua (mais perto do topo/base, com X
-       natural pequeno) vai pro lado com menos membros; a metade que já
-       é claramente de um lado fica onde está. Isso reduz pela metade a
-       altura que cada lado precisa, deixando o bloco mais compacto —
-       os desvios podem ir tanto pra direita quanto pra esquerda, não
-       só no sentido horário.
-    3. Cada metade é redistribuída em Y, simetricamente, em torno do
-       próprio centro natural — e, se a pilha ultrapassar o topo/base
-       do círculo dos rótulos, o bloco DESLIZA pra dentro dessa faixa
-       (em direção ao "equador" da pizza, onde sobra espaço vertical)
-       em vez de crescer pra fora. Sem isso, um punhado de fatias
-       minúsculas no topo empurrava o raio comum do passo 4 pra longe
-       e afastava TODOS os rótulos da pizza junto.
-    4. Por fim, um raio ÚNICO é calculado — o maior que qualquer lado de
-       qualquer bloco precisar — e TODOS os rótulos (mesmo os isolados,
-       tipo fatias grandes que não colidem com nada) são projetados
-       nesse MESMO raio, mantendo o Y já calculado. Assim toda a pizza
-       tem uma "auréola" de rótulos a distância igual do centro, sem
-       exceção, e nenhum fica desnecessariamente mais longe que o
-       mínimo que os blocos mais cheios exigem.
-    5. Empurramos cada rótulo horizontalmente (nunca no eixo vertical,
-       que é o que garante a separação entre eles) o mínimo necessário
-       pra ele nunca ficar por cima da pizza.
-    6. Uma rede de segurança final, na ORDEM NATURAL das fatias (nunca
-       reordenada pela posição já ajustada — isso inverteria a ordem de
-       leitura dos rótulos), compara cada rótulo contra TODOS os já
-       posicionados antes dele (não só o anterior na lista).
-    7. Reaplica o passo 5, já que o passo 6 pode ter mexido no Y de novo.
-    8. Por fim, expande os limites do gráfico se algum rótulo tiver sido
-       empurrado pra além da margem padrão — senão ele pode ficar cortado
-       fora da figura.
-
-    Devolve o `RotulosDaPizza` (ou None, se não houver fatia nenhuma):
-    com ele dá pra refazer o passo de posicionamento num eixo de outro
-    tamanho, que é como as três pizzas de uma amostra acabam iguais.
-    """
-    rotulos = _criar_pizza(ax, sizes, labels, colors, radius)
-    if rotulos is not None:
-        rotulos.posicionar()
-    return rotulos
-
-
 def passos_da_pizza(ax, sizes, labels, colors, radius=1.0):
-    """O mesmo que `draw_pie_with_leaders`, partido em dois pedaços:
-    desenhar as fatias e criar os rótulos, e depois POSICIONAR os
-    rótulos (que é a parte cara). Devolve o `RotulosDaPizza` no fim.
+    """Desenha a pizza em dois pedaços: primeiro as fatias e a criação
+    dos rótulos, depois o POSICIONAMENTO deles (que é a parte cara), com
+    um `yield` no meio. Devolve o `RotulosDaPizza` no fim.
 
-    Serve pra interface desenhar sem travar; veja `passos_do_desenho`
-    em `graficos/figura.py`.
+    Partir em dois é o que deixa a interface desenhar sem travar; veja
+    `passos_do_desenho` em `graficos/figura.py`.
     """
     rotulos = _criar_pizza(ax, sizes, labels, colors, radius)
     yield

@@ -181,11 +181,3 @@ def color_for(element, fallback_index=0):
 def colors_for(elements):
     """Lista de cores, na mesma ordem dos elementos recebidos."""
     return [color_for(e, i) for i, e in enumerate(elements)]
-
-
-def elementos_sem_cor(elements):
-    """Símbolos que não têm cor definida — útil pra conferir a lista."""
-    return sorted({
-        e["symbol"] for e in elements
-        if str(e.get("symbol", "")).lower() not in _POR_SIMBOLO
-    })

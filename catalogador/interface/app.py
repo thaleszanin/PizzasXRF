@@ -49,7 +49,6 @@ from ..exportacao import (PilhaDeImagens, bloco_da_amostra, caminho_livre,
 # cartão ocupa o mesmo espaço antes e depois de ser desenhado, então a
 # barra de rolagem não "pula" quando um gráfico entra na tela.
 FIG_ALTURA_PX = int(FIG_SIZE[1] * FIG_DPI)
-FIG_LARGURA_PX = int(FIG_SIZE[0] * FIG_DPI)
 # O que o cartão consome de largura em volta do gráfico: 10px de margem
 # de cada lado, mais 10px de recheio e 1px de borda de cada lado.
 MARGEM_DO_CARTAO_PX = 42
