@@ -421,6 +421,26 @@ def aplicar_mapeamento(linhas: list, mapeamento: dict) -> list:
     return novas
 
 
+def amostras_isoladas(blocos_tubo: dict) -> list:
+    """Entre os tubos abertos (2 ou mais), quais códigos de amostra
+    aparecem no arquivo de um só tubo — sinal de que a amostra só foi
+    medida ali mesmo, OU de que falta mapear o código pra bater com os
+    outros tubos. Devolve [(amostra, tubo), ...] ordenado por amostra."""
+    tubos_abertos = [t for t in TUBOS if blocos_tubo.get(t)]
+    if len(tubos_abertos) < 2:
+        return []
+
+    presenca = {}  # amostra -> [tubos onde aparece]
+    for tubo in tubos_abertos:
+        _, linhas = blocos_tubo[tubo]
+        codigos = {_celula(linha[0]) for linha in linhas if linha and _celula(linha[0])}
+        for amostra in codigos:
+            presenca.setdefault(amostra, []).append(tubo)
+
+    isoladas = [(amostra, tubos[0]) for amostra, tubos in presenca.items() if len(tubos) == 1]
+    return sorted(isoladas)
+
+
 def detectar_elementos(blocos_tubo: dict) -> list:
     """blocos_tubo: {'Ag': (cabecalho, linhas) | None, 'Au': ..., 'Rh': ...}.
     Devolve a lista de todos os elementos reais encontrados em qualquer um
@@ -492,9 +512,20 @@ def montar_tabela_do_elemento(blocos_tubo: dict, elemento: str):
 class RelatorioGeral:
     por_elemento: dict = field(default_factory=dict)  # elemento -> Relatorio
     elementos_com_1_tubo: list = field(default_factory=list)
+    amostras_isoladas: list = field(default_factory=list)  # [(amostra, tubo), ...]
 
     def linhas_texto(self) -> list:
         linhas = []
+        if self.amostras_isoladas:
+            linhas.append(
+                f"Atenção: {len(self.amostras_isoladas)} amostra(s) apareceram em "
+                "só 1 dos tubos abertos — confira se não é código sem mapeamento "
+                "(a mesma amostra com nomes diferentes em cada tubo):"
+            )
+            for amostra, tubo in self.amostras_isoladas:
+                linhas.append(f"  - {amostra} (só no tubo {tubo})")
+            linhas.append("")
+
         for elemento, rel in self.por_elemento.items():
             linhas.append(f"=== {elemento} ===")
             linhas.extend(rel.linhas_texto())
@@ -517,7 +548,7 @@ def processar_por_tubo(blocos_tubo: dict):
     Devolve (cabecalho, linhas, RelatorioGeral).
     """
     elementos = detectar_elementos(blocos_tubo)
-    relatorio_geral = RelatorioGeral()
+    relatorio_geral = RelatorioGeral(amostras_isoladas=amostras_isoladas(blocos_tubo))
     resultados = {}  # elemento -> {'linhas': {amostra: linha}, 'pares': {...}, 'tubos': [...]}
     ordem_amostras = []
     vistas = set()
