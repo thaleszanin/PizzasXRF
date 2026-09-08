@@ -1,4 +1,4 @@
-CATALOGADOR FRX — VERSÃO GENÉRICA (cópia congelada)
+CATALOGADOR XRF — VERSÃO GENÉRICA (cópia congelada)
 ====================================================
 
 Esta pasta é uma cópia EXATA do catalogador como ele estava em
@@ -13,22 +13,91 @@ sem pastas e sem banco de dados. Carrega os .txt, classifica, desenha e
 salva — e nada mais. É a ferramenta certa quando a amostra não é madeira,
 carne ou soja e você só quer a distinção major/traço na hora.
 
-A versão da raiz (`E:\codigosthales\catalogador_frx.py`) é a que ganhou o
+A versão da raiz (`E:\codigosthales\catalogador_xrf.py`) é a que ganhou o
 banco de amostras com pastas e subpastas editáveis por commodity.
 
 Como rodar
 ----------
-    python generico/catalogador_frx.py
+    python generico/catalogador_xrf.py
 
 Os arquivos aqui dentro são independentes dos da raiz: rodando pelo
 caminho acima, o Python põe a pasta `generico/` na frente do caminho de
 busca, então `import catalogador` acha o pacote DESTA pasta, e não o da
 raiz. Dá para mexer numa versão sem afetar a outra.
 
-O que NÃO mudar aqui
---------------------
-Nada, a princípio: esta cópia é o ponto de retorno. Se ela precisar
-evoluir (por exemplo, para atender a novos tipos de amostra genérica),
-mexa à vontade — mas as mudanças da versão com banco de dados não devem
-ser trazidas para cá, senão as duas viram a mesma coisa e o backup deixa
-de existir.
+O que já mudou desde a cópia
+----------------------------
+* FRX virou XRF em tudo: no texto da janela, nos nomes de função
+  (parse_xrf_file) e no arquivo de entrada, que agora é
+  catalogador_xrf.py. Rode com:
+
+      python generico/catalogador_xrf.py
+
+  A versão da raiz (a do banco de amostras) ainda usa o nome antigo;
+  ela não foi mexida.
+
+* Rolagem rápida em lista grande. Cada cartão virou um item do canvas,
+  com a posição calculada pelo próprio programa. Antes todos moravam
+  dentro de um quadro único, e cada clique da roda obrigava o Tk a
+  arrastar uma janela do tamanho da lista INTEIRA — 12 ms com 5
+  amostras, 35 ms com 20, 119 ms com 80. Agora o canvas desmapeia
+  sozinho o que sai da tela e o custo é o mesmo (uns 7 ms por clique)
+  independentemente do tamanho da lista. De quebra, saber quem está
+  visível virou conta de somar, e o espaço que um cartão reserva antes
+  de nascer passou a ser corrigido pela medida do primeiro cartão real
+  — a lista não dá mais aquele pulinho ao rolar.
+
+* Calcular por áreas ou por concentrações. A primeira caixinha da janela
+  ("Calcular os gráficos por:") escolhe a grandeza:
+
+    1 - Áreas          os .txt do XRF (obrigatórios), como sempre foi.
+    2 - Concentrações  a planilha .xlsx que o programa de concentrações
+                       exporta (obrigatória): a batelada inteira vem da
+                       aba "Resultados", uma amostra por linha.
+
+  O arquivo de mapeamento é opcional nos dois casos e funciona igual
+  (o código da primeira coluna da planilha é o mesmo código do .txt).
+  Trocar de grandeza limpa a lista: meia tela em cps e meia em mg/kg
+  daria uma pizza sem significado.
+
+  A leitura da planilha está em catalogador/nucleo/planilha.py e precisa
+  do openpyxl (pip install openpyxl) — só quem usa essa opção precisa.
+  A unidade sai do cabeçalho da própria planilha, então a tabela mostra
+  o que estiver escrito lá.
+
+* Modo escuro e modo claro. A janela abre no escuro; o botão no canto
+  de cima à direita ("Modo claro"/"Modo escuro") alterna na hora, sem
+  recarregar nada. Os botões são chapados e de canto arredondado —
+  isso o ttk não faz sozinho, então catalogador/interface/cantos.py
+  gera na hora a imagenzinha de fundo de cada um.
+
+  A troca leva um piscar de olhos, e isso foi trabalhoso: o caminho
+  ingênuo (reconfigurar os estilos e redesenhar os gráficos) levava mais
+  de um segundo. Três coisas resolveram, e as três estão comentadas no
+  código, com os tempos medidos:
+    - os estilos dos dois temas são criados no começo, e trocar é só
+      apontar cada widget para o outro (interface/tema.py);
+    - o gráfico é REPINTADO, não desenhado de novo — mudar de tema não
+      move fatia nenhuma (interface/app.py, iniciar_repintura);
+    - a imagem de fundo do botão nasce na altura certa e com o miolo
+      largo, senão o Tk gasta 110 ms por botão pra esticá-la
+      (interface/cantos.py). As cores estão em catalogador/interface/tema.py, e as
+  do gráfico na tela em catalogador/graficos/tema.py. O que é SALVO não
+  muda: o .png sai sempre com fundo branco, para não depender do tema em
+  que a janela estava. A escolha não é guardada entre uma execução e
+  outra — o programa sempre abre no escuro.
+
+* Tipos de gráfico. A janela ganhou a caixinha "Tipo de gráfico", com
+  pizza (o padrão, que é como o programa abre), rosca, barras, barra
+  empilhada e Pareto. Os três painéis continuam os mesmos — Total,
+  Majoritários e Traço —, muda só o desenho, e o tipo escolhido vale
+  também para as imagens salvas. A lista mora em
+  catalogador/graficos/tipos.py: acrescentar um tipo novo é escrever a
+  função de desenho e pôr uma linha lá.
+
+O que NÃO trazer para cá
+------------------------
+Esta cópia é o ponto de retorno. Se ela precisar evoluir (por exemplo,
+para atender a novos tipos de amostra genérica), mexa à vontade — mas as
+mudanças da versão com banco de dados não devem ser trazidas para cá,
+senão as duas viram a mesma coisa e o backup deixa de existir.

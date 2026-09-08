@@ -1,9 +1,10 @@
-"""Catalogador de Espectros FRX.
+"""Catalogador de Espectros XRF.
 
 O pacote está dividido em camadas:
 
   nucleo/        lê os arquivos e aplica as regras (dados puros)
-  graficos/      transforma esses dados em figuras matplotlib
+  graficos/      transforma esses dados em figuras matplotlib (o tipo de
+                 gráfico — pizza, rosca, barras… — está em graficos/tipos.py)
   exportacao.py  monta o conteúdo dos arquivos que o programa salva
   interface/     a janela Tkinter que amarra tudo
 

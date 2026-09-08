@@ -1,7 +1,11 @@
 """Regras de descarte de elementos e separação majoritário/traço.
 
 Funções puras: recebem e devolvem listas de dicionários
-{"z": int, "symbol": str, "area": float}. Sem interface, sem matplotlib.
+{"z": int, "symbol": str, "valor": float}. Sem interface, sem matplotlib.
+
+O "valor" é a grandeza que o gráfico divide: a área do pico quando os
+dados vêm dos .txt do XRF, a concentração quando vêm da planilha. As
+regras aqui são as mesmas nos dois casos.
 """
 
 # Elemento sempre descartado: Argônio (contaminação do ar — as medidas
@@ -39,18 +43,18 @@ def classify(elements, threshold_percent):
     Regra: ordena do menor pro maior; entram no grupo traço um a um
     enquanto a soma acumulada (em % do total) não ultrapassar o limite.
     """
-    total = sum(e["area"] for e in elements)
+    total = sum(e["valor"] for e in elements)
     if total == 0:
         return [], [], 0
 
-    sorted_elements = sorted(elements, key=lambda e: e["area"])
+    sorted_elements = sorted(elements, key=lambda e: e["valor"])
     trace = []
     cumulative = 0.0
     for e in sorted_elements:
-        would_be = (cumulative + e["area"]) / total * 100
+        would_be = (cumulative + e["valor"]) / total * 100
         if would_be <= threshold_percent:
             trace.append(e)
-            cumulative += e["area"]
+            cumulative += e["valor"]
         else:
             break
 

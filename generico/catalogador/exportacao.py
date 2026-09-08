@@ -9,10 +9,10 @@ script, sem abrir janela nenhuma:
 
     import matplotlib
     matplotlib.use("Agg")
-    from catalogador.nucleo import parse_frx_file, apply_exclusions, classify
+    from catalogador.nucleo import parse_xrf_file, apply_exclusions, classify
     from catalogador.exportacao import bloco_da_amostra, linhas_da_tabela
 
-    elementos = parse_frx_file("amostra.txt")
+    elementos = parse_xrf_file("amostra.txt")
     mantidos, fora = apply_exclusions(elementos, tube_z={78, 79})
     maj, tracos, total = classify(mantidos, 10.0)
     texto = bloco_da_amostra("Amostra", "081025af",
@@ -21,6 +21,12 @@ script, sem abrir janela nenhuma:
                              [e["symbol"] for e in fora])
     open("amostra.txt", "w", encoding="utf-8").write(texto)
 
+Sem dizer nada, a tabela sai como sempre saiu: a coluna de valores é a
+ÁREA, em cps. Quando os números vierem da planilha de concentrações,
+`grandeza`, `unidade` e `formatar` mudam o rótulo e as casas decimais
+(veja `nucleo/fontes.py`) — os números em si são os mesmos que a tela
+mostra, venham de onde vierem.
+
 A dependência continua andando num sentido só:
 interface -> exportacao -> graficos -> nucleo.
 """
@@ -28,71 +34,95 @@ interface -> exportacao -> graficos -> nucleo.
 import os
 from datetime import date
 
-# Cabeçalho da tabela e o alinhamento de cada coluna ("<" à esquerda,
-# ">" à direita). É a mesma tabela que aparece na tela.
-CABECALHO = ("Z", "Elemento", "Área (cps)", "% do total", "Grupo")
+# O alinhamento de cada coluna ("<" à esquerda, ">" à direita) e as
+# colunas que não mudam nunca. A do meio é a única que depende de onde os
+# dados vieram: "Área (cps)" ou "Concentração (mg/kg)".
+GRANDEZA_PADRAO, UNIDADE_PADRAO = "Área", "cps"
 ALINHAMENTO = (">", "<", ">", ">", "<")
 
 
-def linhas_da_tabela(major, trace, total):
-    """As linhas da tabela de uma amostra, da maior área pra menor.
+def _formato_padrao(valor):
+    return "%.0f" % valor
 
-    Devolve tuplas de texto já formatado (Z, símbolo, área, %, grupo) —
+
+def _porcentagem(pct):
+    """A fatia do total, com duas casas. Abaixo do que duas casas
+    mostram, o texto diz isso em vez de escrever "0.00%" — numa lista de
+    concentrações, elemento de 0,002% do total é comum."""
+    return "%.2f%%" % pct if pct >= 0.005 else "<0.01%"
+
+
+def cabecalho_da_tabela(grandeza=GRANDEZA_PADRAO, unidade=UNIDADE_PADRAO):
+    """Os títulos das colunas. É a mesma tabela que aparece na tela."""
+    return ("Z", "Elemento", "%s (%s)" % (grandeza, unidade), "% do total", "Grupo")
+
+
+def linhas_da_tabela(major, trace, total, formatar=_formato_padrao):
+    """As linhas da tabela de uma amostra, do maior valor pro menor.
+
+    Devolve tuplas de texto já formatado (Z, símbolo, valor, %, grupo) —
     as MESMAS que a tabela da tela mostra, pra tela e arquivo nunca
     discordarem.
     """
     if total <= 0:
         return []
-    linhas = [(e["z"], e["symbol"], e["area"], grupo)
+    linhas = [(e["z"], e["symbol"], e["valor"], grupo)
               for grupo, elementos in (("majoritário", major), ("traço", trace))
               for e in elementos]
     linhas.sort(key=lambda l: -l[2])
-    return [(str(z), simbolo, f"{area:.0f}", f"{area / total * 100:.2f}%", grupo)
-            for z, simbolo, area, grupo in linhas]
+    return [(str(z), simbolo, formatar(valor), _porcentagem(valor / total * 100),
+             grupo) for z, simbolo, valor, grupo in linhas]
 
 
-def _tabela_alinhada(linhas):
+def _tabela_alinhada(linhas, cabecalho):
     """A tabela em colunas de largura fixa, pra ficar legível no Bloco de
     Notas (e ainda dar pra importar como largura fixa numa planilha)."""
-    colunas = list(zip(CABECALHO, *linhas)) if linhas else [(c,) for c in CABECALHO]
+    colunas = list(zip(cabecalho, *linhas)) if linhas else [(c,) for c in cabecalho]
     larguras = [max(len(valor) for valor in coluna) for coluna in colunas]
 
     def formata(valores):
         return "  ".join(f"{v:{a}{w}}" for v, a, w in
                          zip(valores, ALINHAMENTO, larguras)).rstrip()
 
-    saida = [formata(CABECALHO), "  ".join("-" * w for w in larguras)]
+    saida = [formata(cabecalho), "  ".join("-" * w for w in larguras)]
     saida.extend(formata(linha) for linha in linhas)
     return saida
 
 
-def bloco_da_amostra(nome, codigo, linhas, total, limite, tubo, descartados):
+def bloco_da_amostra(nome, codigo, linhas, total, limite, tubo, descartados,
+                     grandeza=GRANDEZA_PADRAO, unidade=UNIDADE_PADRAO,
+                     formatar=_formato_padrao):
     """O texto completo da tabela de UMA amostra: um cabeçalho dizendo em
     que condições ela foi classificada, e a tabela em si.
 
-    O cabeçalho não é enfeite — sem o limite do traço e o tubo, a coluna
-    "Grupo" não quer dizer nada seis meses depois.
+    O cabeçalho não é enfeite — sem o limite do traço, o tubo e a
+    grandeza, a coluna "Grupo" não quer dizer nada seis meses depois.
     """
-    cabecalho = [
+    topo = [
         f"Amostra: {nome}",
         f"Arquivo: {codigo}",
         f"Tubo de raios X: {tubo}",
         f"Limite do grupo traço: {limite:.1f}%",
     ]
     if descartados:
-        cabecalho.append("Descartado: " + ", ".join(descartados))
-    cabecalho.append(f"Área total (cps): {total:.0f}")
-    return "\n".join(cabecalho + [""] + _tabela_alinhada(linhas)) + "\n"
+        topo.append("Descartado: " + ", ".join(descartados))
+    topo.append("%s total (%s): %s" % (grandeza, unidade, formatar(total)))
+    tabela = _tabela_alinhada(linhas, cabecalho_da_tabela(grandeza, unidade))
+    return "\n".join(topo + [""] + tabela) + "\n"
 
 
-def documento_compilado(blocos, limite, tubo, mapeamento_usado):
+def documento_compilado(blocos, limite, tubo, mapeamento_usado, fonte=None):
     """Um arquivo só com a tabela de todas as amostras, uma embaixo da
     outra."""
     separador = "=" * 74
     cabecalho = [
         separador,
-        "Catalogador de Espectros FRX — %d amostra(s)" % len(blocos),
+        "Catalogador de Espectros XRF — %d amostra(s)" % len(blocos),
         separador,
+    ]
+    if fonte:
+        cabecalho.append(f"Fonte dos dados: {fonte}")
+    cabecalho += [
         f"Tubo de raios X: {tubo}",
         f"Limite do grupo traço: {limite:.1f}%",
         "Nomes das amostras: %s" % ("do arquivo de mapeamento" if mapeamento_usado
@@ -135,7 +165,7 @@ def pasta_da_exportacao(destino):
     Sem isso, uma batelada de 60 amostras espalharia 120 arquivos soltos
     dentro da pasta escolhida, misturados com o que já estivesse lá.
     """
-    base = "Amostras FRX %s" % date.today().isoformat()
+    base = "Amostras XRF %s" % date.today().isoformat()
     caminho = os.path.join(destino, base)
     numero = 2
     while os.path.exists(caminho):

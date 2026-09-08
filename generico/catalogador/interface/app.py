@@ -3,15 +3,32 @@
 Toda a lógica de dados vive em `catalogador.nucleo` e todo o desenho em
 `catalogador.graficos`. Esta camada só amarra as duas coisas na tela.
 
+As CORES não estão aqui: ficam em `interface/tema.py`, que tem o modo
+escuro e o claro. Aqui os widgets só dizem de que estilo são
+("Perigo.TButton", "Aviso.TLabel"…), e trocar de tema é reconfigurar
+esses estilos — nenhum widget é recriado.
+
 Sobre desempenho
 ----------------
-A parte cara do programa é desenhar as três pizzas de uma amostra. Por
-isso esta camada foi montada pra refazer esse trabalho o mínimo
-possível:
+A parte cara do programa é desenhar os três gráficos de uma amostra
+(sobretudo quando o tipo escolhido é a pizza, que ainda precisa resolver
+onde cada rótulo cabe). Por isso esta camada foi montada pra refazer
+esse trabalho o mínimo possível:
 
   * cada amostra tem um cartão (`SampleCard`) que nasce UMA vez e é
     reaproveitado — carregar mais arquivos, mexer no slider ou trocar o
     tubo não destrói nem recria widget nenhum, só atualiza o conteúdo;
+  * cada cartão é um ITEM do canvas, com a posição calculada por nós, em
+    vez de todos ficarem empilhados dentro de um quadro único. O quadro
+    único obrigava o Tk a arrastar uma janela do tamanho da lista INTEIRA
+    a cada rolagem: 12 ms com 5 amostras, 35 ms com 20, 119 ms com 80.
+    Em itens separados, o canvas desmapeia sozinho o que sai da tela e a
+    rolagem custa uns 10 ms, não importa o tamanho da lista;
+  * e, como as posições são nossas, saber quem está visível virou conta
+    de somar — antes era uma passada de geometria do Tk a cada rolagem;
+  * trocar o TIPO de gráfico invalida só o desenho: a tabela, o nome e
+    os avisos de cada cartão continuam valendo, porque não dependem
+    dele;
   * o gráfico E a tabela só são montados nos cartões que estão (ou estão
     quase) na área visível; quem está fora da tela espera você rolar até
     lá — repopular a tabela de uma amostra fora da tela custa quase nada
@@ -37,13 +54,18 @@ from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from ..nucleo.leitura import parse_frx_file, parse_mapping
+from ..nucleo.leitura import parse_xrf_file, parse_mapping
+from ..nucleo.planilha import parse_planilha
+from ..nucleo.fontes import CONCENTRACOES, FONTE_PADRAO, FONTES
 from ..nucleo.classificacao import TUBE_OPTIONS, apply_exclusions, classify
 from ..graficos.figura import (FIG_DPI, FIG_SIZE, build_sample_figure,
                               passos_da_rasterizacao, passos_do_desenho)
-from ..exportacao import (PilhaDeImagens, bloco_da_amostra, caminho_livre,
-                          documento_compilado, escrever_texto, linhas_da_tabela,
-                          nome_de_arquivo, pasta_da_exportacao)
+from ..graficos.tipos import TIPO_PADRAO, TIPOS
+from ..graficos.tema import pintar
+from .tema import TEMA_PADRAO, outro, pintar_janela, preparar, trocar
+from ..exportacao import (PilhaDeImagens, bloco_da_amostra, cabecalho_da_tabela,
+                          caminho_livre, documento_compilado, escrever_texto,
+                          linhas_da_tabela, nome_de_arquivo, pasta_da_exportacao)
 
 # Altura reservada pro gráfico dentro do cartão. É fixa de propósito: o
 # cartão ocupa o mesmo espaço antes e depois de ser desenhado, então a
@@ -52,6 +74,8 @@ FIG_ALTURA_PX = int(FIG_SIZE[1] * FIG_DPI)
 # O que o cartão consome de largura em volta do gráfico: 10px de margem
 # de cada lado, mais 10px de recheio e 1px de borda de cada lado.
 MARGEM_DO_CARTAO_PX = 42
+# A margem entre o cartão e a borda da lista, e entre um cartão e outro.
+MARGEM_X_PX, MARGEM_Y_PX, ESPACO_ENTRE_CARTOES_PX = 10, 8, 16
 # Largura mínima do gráfico, pra ele não virar um risco numa janela
 # muito estreita (aí a lista ganha barra de rolagem horizontal).
 LARGURA_MINIMA_PX = 700
@@ -92,9 +116,10 @@ ALTURA_CHUTE_PX = FIG_ALTURA_PX + 300
 # aviso de descarte. São os mesmos números usados no `pack` do cartão.
 RECHEIO_PX, ESPACO_TABELA_PX, ESPACO_AVISO_PX = 22, 8, 4
 
-COLUNAS = ("z", "elemento", "area", "pct", "grupo")
-CABECALHOS = {"z": "Z", "elemento": "Elemento", "area": "Área (cps)",
-              "pct": "% do total", "grupo": "Grupo"}
+# A coluna do meio muda de nome conforme a fonte dos dados ("Área (cps)"
+# ou "Concentração (mg/kg)"), então o texto de cada cabeçalho vem de
+# `exportacao.cabecalho_da_tabela` — o mesmo que vai pro arquivo .txt.
+COLUNAS = ("z", "elemento", "valor", "pct", "grupo")
 
 
 def _tube_key(tube_z):
@@ -121,6 +146,7 @@ class SampleCard:
         self.state_key = None    # o estado JÁ CALCULADO (nome/avisos/dados)
         self.drawn_key = None    # o estado já DESENHADO (as pizzas)
         self.table_key = None    # o estado já MOSTRADO na tabela
+        self.tema_pintado = None  # o tema com que a figura foi pintada
         self.canvas = None       # FigureCanvasTkAgg, criado sob demanda
         self.display_name = sample["code"]
         self._dados = ([], [], [], 0.0)  # kept, major, trace, total
@@ -129,14 +155,17 @@ class SampleCard:
         self._aviso = ""
         self._layout_key = None
         self._altura_tabela = 1
-        self._altura_reservada = None
 
         self.montado = False
-        self._altura_reservada = app.altura_estimada(1, False)
-        self.frame = ttk.Frame(master, relief="groove", borderwidth=1,
-                               height=self._altura_reservada)
-        self.frame.pack(fill="x", padx=10, pady=8)
+        # onde o cartão está e quanto ele ocupa: quem manda nesses dois
+        # números somos nós, e é assim que a lista sabe se posicionar sem
+        # pedir nada ao Tk (veja `App._reposicionar`)
+        self.altura = app.altura_estimada(1, False)
+        self.y = 0
+        self.frame = ttk.Frame(app.scroll_canvas, style=app.estilo("Cartao.TFrame"),
+                               borderwidth=1, height=self.altura)
         self.frame.pack_propagate(False)  # enquanto vazio, a altura é a de palpite
+        self.item = app.criar_item(self)
 
     # ---------- o recheio, montado só quando o cartão se aproxima ----------
 
@@ -148,22 +177,26 @@ class SampleCard:
         app, sample = self.app, self.sample
 
         self.frame.configure(padding=10)
-        header = ttk.Frame(self.frame)
+        header = ttk.Frame(self.frame, style=app.estilo("Painel.TFrame"))
         header.pack(fill="x")
         self.toggle_btn = ttk.Button(
             header, width=3, command=self.toggle,
+            style=app.estilo("Cartao.Neutro.TButton"),
             text=SETA_FECHADO if self.collapsed else SETA_ABERTO)
         self.toggle_btn.pack(side="left", padx=(0, 6))
         self.name_label = ttk.Label(header, text=self.display_name,
-                                    font=("Segoe UI", 12, "bold"))
+                                    style=app.estilo("Titulo.TLabel"))
         self.name_label.pack(side="left")
         ttk.Label(header, text=f"   arquivo: {sample['code']}",
-                  foreground="#6B6250").pack(side="left")
+                  style=app.estilo("Fraco.TLabel")).pack(side="left")
         ttk.Button(header, text="Remover",
+                   style=app.estilo("Cartao.Neutro.TButton"),
                    command=lambda: app.remove_sample(self)).pack(side="right")
         ttk.Button(header, text="Salvar tabela (TXT)",
+                   style=app.estilo("Cartao.TButton"),
                    command=self.save_table).pack(side="right", padx=6)
         ttk.Button(header, text="Salvar imagem (PNG)",
+                   style=app.estilo("Cartao.TButton"),
                    command=self.save_figure).pack(side="right")
 
         # o espaço do gráfico já nasce do tamanho exato da figura: assim o
@@ -173,21 +206,24 @@ class SampleCard:
         # ser desenhado, então a rolagem não pula); a LARGURA acompanha a
         # janela, senão o terceiro gráfico fica cortado quando a janela é
         # menor que a figura
-        self.plot_area = ttk.Frame(self.frame, height=FIG_ALTURA_PX)
+        self.plot_area = ttk.Frame(self.frame, height=FIG_ALTURA_PX,
+                                   style=app.estilo("Painel.TFrame"))
         self.plot_area.pack_propagate(False)
         self.placeholder = ttk.Label(self.plot_area, anchor="center",
-                                     foreground="#9A927F",
+                                     style=app.estilo("Fraco.TLabel"),
                                      text="Gráfico desenhado ao rolar até aqui…")
         self.placeholder.pack(expand=True)
 
         self.fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
 
-        self.warn_label = ttk.Label(self.frame, foreground="#B8792E", wraplength=1100)
+        self.warn_label = ttk.Label(self.frame, wraplength=1100,
+                                    style=app.estilo("Aviso.TLabel"))
 
         self.tree = ttk.Treeview(self.frame, columns=COLUNAS, show="headings",
-                                 height=self._altura_tabela)
-        for col in COLUNAS:
-            self.tree.heading(col, text=CABECALHOS[col])
+                                 height=self._altura_tabela,
+                                 style=app.estilo("Treeview"))
+        for col, titulo in zip(COLUNAS, app.cabecalhos_da_tabela()):
+            self.tree.heading(col, text=titulo)
             self.tree.column(col, width=110, anchor="center")
 
         if self._aviso:
@@ -199,6 +235,7 @@ class SampleCard:
         self.frame.pack_propagate(True)
         self.frame.configure(height=0)
         app.medir_alturas(self)
+        app.medir_cartao(self)
 
     # ---------- minimizar / expandir ----------
 
@@ -216,12 +253,12 @@ class SampleCard:
         if collapsed == self.collapsed:
             return
         self.collapsed = collapsed
-        self.app._geometria_suja = True
         if not self.montado:
             self._reservar_altura()
             return
         self.toggle_btn.config(text=SETA_FECHADO if collapsed else SETA_ABERTO)
         self._aplicar_layout()
+        self.app.medir_cartao(self)
 
     def _aplicar_layout(self):
         """(Re)empacota o corpo do cartão. Só mexe quando algo mudou de
@@ -231,7 +268,6 @@ class SampleCard:
         if chave == self._layout_key:
             return
         self._layout_key = chave
-        self.app._geometria_suja = True
         for widget in (self.plot_area, self.warn_label, self.tree):
             widget.pack_forget()
         if self.collapsed:
@@ -281,7 +317,7 @@ class SampleCard:
             self._altura_tabela = altura
             if self.montado:
                 self.tree.configure(height=altura)
-                self.app._geometria_suja = True
+                self.app.medir_cartao(self)
         if not self.montado:
             self._reservar_altura()
 
@@ -289,20 +325,19 @@ class SampleCard:
         """Ajusta a altura do retângulo vazio pro tamanho que o cartão
         vai ter quando for montado.
 
-        Só mexe quando o número muda: cada `configure` obriga o Tk a
-        recalcular o layout da lista inteira, e trocar o limite do traço
-        não muda a altura de cartão nenhum."""
+        Só mexe quando o número muda: mudar a altura empurra todos os
+        cartões debaixo, e trocar o limite do traço não muda a altura de
+        cartão nenhum."""
         nova = self.app.altura_estimada(self._altura_tabela, bool(self._aviso),
                                         self.collapsed)
-        if nova != self._altura_reservada:
-            self._altura_reservada = nova
+        if nova != self.altura:
             self.frame.configure(height=nova)
-            self.app._geometria_suja = True
+            self.app.definir_altura(self, nova)
 
     def _fill_table(self, major, trace, total):
         # as MESMAS linhas que vão pro arquivo .txt (catalogador/exportacao.py),
         # pra tela e arquivo nunca discordarem
-        linhas = linhas_da_tabela(major, trace, total)
+        linhas = linhas_da_tabela(major, trace, total, self.app.fonte["formatar"])
 
         # apaga tudo numa tacada só: linha a linha, o Treeview refaz o
         # layout a cada remoção
@@ -317,6 +352,28 @@ class SampleCard:
     @property
     def needs_draw(self):
         return self.drawn_key != self.state_key
+
+    @property
+    def precisa_repintar(self):
+        """O desenho está em dia, mas nas cores do outro tema."""
+        return (not self.needs_draw and self.canvas is not None
+                and self.tema_pintado != self.app.cores["grafico"])
+
+    def iniciar_repintura(self):
+        """Troca só as CORES da figura que já está pronta.
+
+        Mudar de tema não move nada: as fatias, os rótulos e a posição
+        de cada um continuam onde estavam — e é o cálculo dessa posição
+        que custa caro (uns 70 ms por cartão). Repintar e mandar pra
+        tela custa menos da metade disso, e é o que faz a troca de tema
+        parecer imediata mesmo com a lista cheia.
+        """
+        tema = self.app.cores["grafico"]
+        pintar(self.fig, tema)
+        yield
+        yield from passos_da_rasterizacao(self.fig)
+        self.canvas.blit()
+        self.tema_pintado = tema
 
     def montar_tabela(self):
         """Põe as linhas na tabela. É barato (milissegundos), e por isso
@@ -353,6 +410,8 @@ class SampleCard:
         if self.canvas is None:
             self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_area)
             widget = self.canvas.get_tk_widget()
+            widget.configure(background=self.app.cores["painel"],
+                             highlightthickness=0)
             # O matplotlib escuta mouse/teclado no widget dele pra dar
             # zoom, "pick" e coordenadas — nada disso é usado aqui, e
             # cada evento desses vira chamada Python. Ao rolar a lista, o
@@ -378,7 +437,11 @@ class SampleCard:
 
     def _passos_do_cartao(self, chave, kept, major, trace, total):
         yield from passos_do_desenho(self.fig, kept, major, trace, total,
-                                     self.display_name)
+                                     self.display_name, self.app.tipo)
+        # as cores do tema entram DEPOIS do desenho, e só na figura da
+        # tela: o .png salvo continua saindo no fundo branco de sempre
+        tema = self.app.cores["grafico"]
+        pintar(self.fig, tema)
         yield from passos_da_rasterizacao(self.fig)
         # `blit` só copia os pixels prontos pro Tk: é a única parte que
         # precisa mesmo acontecer na linha do tempo da janela
@@ -388,6 +451,7 @@ class SampleCard:
             self.placeholder = None
             self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.drawn_key = chave
+        self.tema_pintado = tema
 
     def save_figure(self):
         path = filedialog.asksaveasfilename(
@@ -440,6 +504,7 @@ class SampleCard:
             messagebox.showinfo("Salvo", "Tabela salva em:\n%s" % path)
 
     def destroy(self):
+        self.app.remover_item(self)
         if not self.montado:
             self.frame.destroy()
             return
@@ -460,18 +525,30 @@ class App(tk.Tk):
         # gráficos se refazem na largura nova.
         self.geometry("1400x820")
 
+        # o tema é a PRIMEIRA coisa: os widgets nascem já pintados.
+        # Os estilos dos DOIS temas são criados agora, e é isso que faz
+        # a troca depois ser imediata.
+        self.style = ttk.Style(self)
+        preparar(self, self.style)
+        self.tema = TEMA_PADRAO
+        self.cores = pintar_janela(self, self.tema)
+
         # -------- estado da aplicação --------
+        self.fonte = FONTES[FONTE_PADRAO]   # de onde vêm os números
+        self.unidade = self.fonte["unidade"]
         self.samples = []          # [{"code": str, "elements": [...]}]
         self.cards = []            # um SampleCard por amostra, na ordem
         self.name_mapping = {}     # {"081025af": "Madeira 123", ...}
         self.threshold = 10.0
         self.tube_z = None
+        self.tipo = TIPO_PADRAO       # tipo de gráfico (pizza, barras, …)
         self._render_after_id = None  # debounce do slider
         self._draw_job = None         # próximo passo da fila de desenho
         self._draw_queue = None       # cartões visíveis do lote atual
         self._draw_limite = None      # até quando dá pra adiar o desenho
-        self._geometria_suja = True   # a lista mudou de forma?
+        self._altura_total = 0        # o tamanho da região rolável
         self._alturas = None          # medidas tiradas de um cartão real
+        self._correcao = {}           # o quanto o palpite de altura erra
         self._passos = None           # desenho em andamento (gerador)
         self._card_em_desenho = None
         self._sync_job = None         # criação dos cartões em lotes
@@ -486,6 +563,15 @@ class App(tk.Tk):
 
     # ---------- construção da UI ----------
 
+    def estilo(self, papel):
+        """O estilo do tema de agora para um papel ("Titulo.TLabel").
+
+        Todo widget desta janela nasce com um destes: é assim que a
+        troca de tema sabe o que cada um é, e é assim que um cartão
+        criado DEPOIS de trocar já nasce na cor certa.
+        """
+        return "%s.%s" % (self.tema, papel)
+
     def destroy(self):
         # Fechar a janela com desenho/exportação agendados fazia o Tk
         # tentar rodar esses callbacks depois que os widgets já não
@@ -498,87 +584,148 @@ class App(tk.Tk):
         super().destroy()
 
     def _build_top_controls(self):
-        frame = ttk.Frame(self, padding=12)
+        frame = ttk.Frame(self, padding=12, style=self.estilo("TFrame"))
         frame.pack(fill="x")
 
         # Cada linha é uma faixa própria: os controles (e o rótulo que
         # explica cada um) ficam encostados uns nos outros. Numa grade
         # única, a coluna do slider empurrava o "10.0%" e o aviso do
         # mapeamento pra longe, do outro lado da janela.
-        linha0 = ttk.Frame(frame)
-        linha0.grid(row=0, column=0, columnspan=2, sticky="w", pady=4)
-        ttk.Button(linha0, text="1. Carregar amostras (.txt)",
-                   command=self.load_samples).pack(side="left")
+        frame.columnconfigure(1, weight=1)
+        # A fonte vem antes de tudo: é ela que diz o que o botão 1 abre.
+        ttk.Label(frame, text="Calcular os gráficos por:",
+                  style=self.estilo("Secao.TLabel")).grid(row=0, column=0,
+                                                          sticky="w", pady=4)
+        linha_fonte = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha_fonte.grid(row=0, column=1, sticky="w", pady=4)
+        self.fonte_var = tk.StringVar(value=FONTE_PADRAO)
+        fonte_combo = ttk.Combobox(linha_fonte, textvariable=self.fonte_var,
+                                   values=list(FONTES), state="readonly",
+                                   width=30, style=self.estilo("TCombobox"))
+        fonte_combo.pack(side="left")
+        fonte_combo.bind("<<ComboboxSelected>>", self.on_fonte_change)
+
+        linha0 = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha0.grid(row=1, column=0, columnspan=2, sticky="we", pady=4)
+        self.load_btn = ttk.Button(linha0, text=self.fonte["botao"],
+                                   style=self.estilo("TButton"),
+                                   command=self.load_samples)
+        self.load_btn.pack(side="left")
         ttk.Button(linha0, text="2. Carregar mapeamento (.csv/.txt)",
+                   style=self.estilo("TButton"),
                    command=self.load_mapping).pack(side="left", padx=6)
-        self.mapping_label = ttk.Label(linha0, text="Nenhum mapeamento carregado.")
+        self.mapping_label = ttk.Label(linha0, text="Nenhum mapeamento carregado.",
+                                       style=self.estilo("FracoFundo.TLabel"))
         self.mapping_label.pack(side="left", padx=(6, 0))
 
-        ttk.Label(frame, text="Tubo de raios X utilizado:").grid(row=1, column=0, sticky="w", pady=(12, 0))
-        linha1 = ttk.Frame(frame)
-        linha1.grid(row=1, column=1, sticky="w", pady=(12, 0))
+        # no canto oposto da mesma linha, longe dos botões de trabalho
+        self.tema_btn = ttk.Button(linha0, style=self.estilo("Neutro.TButton"),
+                                   text="Modo %s" % outro(self.tema).lower(),
+                                   command=self.on_tema_change)
+        self.tema_btn.pack(side="right")
+
+        ttk.Label(frame, text="Tubo de raios X utilizado:", style=self.estilo("Secao.TLabel")).grid(row=2, column=0, sticky="w", pady=(12, 0))
+        linha1 = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha1.grid(row=2, column=1, sticky="w", pady=(12, 0))
         self.tube_var = tk.StringVar(value="Nenhum")
-        tube_combo = ttk.Combobox(linha1, textvariable=self.tube_var, values=list(TUBE_OPTIONS.keys()),
-                                   state="readonly", width=18)
+        tube_combo = ttk.Combobox(linha1, textvariable=self.tube_var,
+                                  values=list(TUBE_OPTIONS.keys()),
+                                  state="readonly", width=18,
+                                  style=self.estilo("TCombobox"))
         tube_combo.pack(side="left")
         tube_combo.bind("<<ComboboxSelected>>", self.on_tube_change)
 
-        ttk.Label(frame, text="Limite do grupo traço:").grid(row=2, column=0, sticky="w", pady=(12, 0))
-        linha2 = ttk.Frame(frame)
-        linha2.grid(row=2, column=1, sticky="w", pady=(12, 0))
+        ttk.Label(frame, text="Tipo de gráfico:", style=self.estilo("Secao.TLabel")).grid(row=3, column=0, sticky="w", pady=(12, 0))
+        linha_tipo = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha_tipo.grid(row=3, column=1, sticky="w", pady=(12, 0))
+        self.tipo_var = tk.StringVar(value=TIPO_PADRAO)
+        tipo_combo = ttk.Combobox(linha_tipo, textvariable=self.tipo_var,
+                                  values=list(TIPOS), state="readonly", width=18,
+                                  style=self.estilo("TCombobox"))
+        tipo_combo.pack(side="left")
+        tipo_combo.bind("<<ComboboxSelected>>", self.on_tipo_change)
+
+        ttk.Label(frame, text="Limite do grupo traço:", style=self.estilo("Secao.TLabel")).grid(row=4, column=0, sticky="w", pady=(12, 0))
+        linha2 = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha2.grid(row=4, column=1, sticky="w", pady=(12, 0))
         self.threshold_var = tk.DoubleVar(value=10.0)
         slider = ttk.Scale(linha2, from_=1, to=50, orient="horizontal",
-                            variable=self.threshold_var, command=self.on_threshold_change, length=260)
+                           variable=self.threshold_var, length=260,
+                           command=self.on_threshold_change,
+                           style=self.estilo("Horizontal.TScale"))
         slider.pack(side="left")
         slider.bind("<ButtonRelease-1>", self.on_slider_release)
 
         self.threshold_entry_var = tk.StringVar(value="10.0")
         threshold_entry = ttk.Spinbox(
             linha2, from_=1, to=50, increment=0.5, width=6,
-            textvariable=self.threshold_entry_var, command=self.on_threshold_entry_commit,
+            textvariable=self.threshold_entry_var,
+            command=self.on_threshold_entry_commit,
+            style=self.estilo("TSpinbox"),
         )
         threshold_entry.pack(side="left", padx=(8, 0))
         threshold_entry.bind("<Return>", self.on_threshold_entry_commit)
         threshold_entry.bind("<FocusOut>", self.on_threshold_entry_commit)
 
-        self.threshold_label = ttk.Label(linha2, text="10.0%")
+        self.threshold_label = ttk.Label(linha2, text="10.0%",
+                                         style=self.estilo("Secao.TLabel"))
         self.threshold_label.pack(side="left", padx=(8, 0))
 
     def _build_export_controls(self):
-        """A faixa de baixo: minimizar tudo e salvar a batelada inteira."""
-        frame = ttk.Frame(self, padding=(12, 0, 12, 10))
+        """A faixa de baixo: o que vale pra batelada inteira — minimizar,
+        remover e salvar todas as amostras de uma vez."""
+        frame = ttk.Frame(self, padding=(12, 0, 12, 10),
+                          style=self.estilo("TFrame"))
         frame.pack(fill="x")
 
         self.toggle_all_btn = ttk.Button(frame, text="Minimizar todas",
+                                         style=self.estilo("Neutro.TButton"),
                                          command=self.toggle_all)
         self.toggle_all_btn.pack(side="left")
 
-        ttk.Label(frame, text="Salvar todas as amostras:").pack(side="left", padx=(24, 6))
+        ttk.Label(frame, text="Salvar todas as amostras:",
+                  style=self.estilo("Secao.TLabel")).pack(side="left", padx=(24, 6))
         self.export_buttons = [
             ttk.Button(frame, text="Num arquivo só",
+                       style=self.estilo("Sucesso.TButton"),
                        command=lambda: self.export_all("compilado")),
             ttk.Button(frame, text="Um arquivo por amostra",
+                       style=self.estilo("Sucesso.TButton"),
                        command=lambda: self.export_all("individuais")),
         ]
         for botao in self.export_buttons:
             botao.pack(side="left", padx=3)
 
-        self.export_label = ttk.Label(frame, text="", foreground="#6B6250")
+        self.export_label = ttk.Label(frame, text="",
+                                      style=self.estilo("FracoFundo.TLabel"))
         self.export_label.pack(side="left", padx=10)
 
+        # Sozinho no canto direito, do outro lado da faixa: é o único
+        # botão daqui que faz perder trabalho, e encostado nos outros
+        # era clique errado esperando pra acontecer.
+        ttk.Button(frame, text="Remover todas",
+                   style=self.estilo("Perigo.TButton"),
+                   command=self.remove_all).pack(side="right")
+
     def _build_scroll_area(self):
-        """Cria uma área rolável, já que podemos ter muitas amostras
-        carregadas de uma vez (processamento em batelada)."""
-        container = ttk.Frame(self)
+        """Cria a área rolável, já que podemos ter muitas amostras
+        carregadas de uma vez (processamento em batelada).
+
+        Cada cartão é um item do canvas, posicionado por nós. Era um
+        quadro só, com os cartões empilhados dentro dele, e aí toda
+        rolagem arrastava uma janela do tamanho da lista inteira — com
+        80 amostras, 119 ms por clique da roda. O canvas, em troca,
+        desmapeia sozinho os itens que saem da tela.
+        """
+        container = ttk.Frame(self, style=self.estilo("TFrame"))
         container.pack(fill="both", expand=True)
 
-        canvas = tk.Canvas(container, borderwidth=0, highlightthickness=0)
+        canvas = tk.Canvas(container, borderwidth=0, highlightthickness=0,
+                           background=self.cores["fundo"])
         self.scroll_canvas = canvas
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self._on_scrollbar)
-        self.cards_frame = ttk.Frame(canvas)
-
-        self.cards_frame.bind("<Configure>", self._on_cards_configure)
-        self._window_id = canvas.create_window((0, 0), window=self.cards_frame, anchor="nw")
+        scrollbar = ttk.Scrollbar(container, orient="vertical",
+                                  command=self._on_scrollbar,
+                                  style=self.estilo("Vertical.TScrollbar"))
         canvas.bind("<Configure>", self._on_canvas_configure)
         canvas.configure(yscrollcommand=scrollbar.set)
 
@@ -588,17 +735,111 @@ class App(tk.Tk):
         # rolar com a roda do mouse
         canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
-        self.empty_label = ttk.Label(self.cards_frame,
+        self.empty_label = ttk.Label(canvas,
+                                     style=self.estilo("FracoFundo.TLabel"),
                                      text="Nenhuma amostra carregada ainda.", padding=24)
+        self._item_vazio = canvas.create_window(MARGEM_X_PX, MARGEM_Y_PX,
+                                                window=self.empty_label, anchor="nw")
+
+    # ---------- a posição de cada cartão na lista ----------
+
+    def criar_item(self, card):
+        """Põe o cartão no canvas, logo abaixo do último. Devolve o id do
+        item, que é por onde a posição e a largura dele são mexidas."""
+        anterior = self.cards[-1] if self.cards else None
+        card.y = (anterior.y + anterior.altura + ESPACO_ENTRE_CARTOES_PX
+                  if anterior is not None else MARGEM_Y_PX)
+        item = self.scroll_canvas.create_window(
+            MARGEM_X_PX, card.y, window=card.frame, anchor="nw",
+            width=self.largura_do_cartao())
+        return item
+
+    def definir_altura(self, card, altura):
+        """O cartão passou a ocupar outra altura: empurra os de baixo."""
+        if altura == card.altura:
+            return
+        card.altura = altura
+        self._reposicionar(self.cards.index(card) + 1)
+
+    def medir_cartao(self, card):
+        """Mede o cartão montado e acerta a lista se ele mudou de altura.
+
+        A conta de `altura_estimada` é boa, mas é uma estimativa; aqui o
+        número é o que o Tk realmente vai usar. Só é chamada quando algo
+        que MUDA a altura acontece (montar, minimizar, a tabela ganhar ou
+        perder linhas), nunca ao rolar.
+        """
+        if not card.montado:
+            return
+        self.update_idletasks()
+        real = card.frame.winfo_reqheight()
+
+        # de quebra, aprende o quanto o palpite erra: os cartões que
+        # ainda não nasceram passam a reservar o espaço certo, e a lista
+        # para de dar aquele pulinho quando um deles é montado
+        if self._alturas is not None:
+            bruta = self._altura_bruta(card._altura_tabela, bool(card._aviso),
+                                       card.collapsed)
+            if self._correcao.get(card.collapsed) != real - bruta:
+                self._correcao[card.collapsed] = real - bruta
+                self._reservar_todas()
+
+        self.definir_altura(card, real)
+
+    def _reservar_todas(self):
+        """Refaz de uma vez o espaço reservado pelos cartões que ainda
+        não nasceram — é o que se faz quando a correção de altura muda."""
+        mudou = False
+        for card in self.cards:
+            if card.montado:
+                continue
+            nova = self.altura_estimada(card._altura_tabela, bool(card._aviso),
+                                        card.collapsed)
+            if nova != card.altura:
+                card.frame.configure(height=nova)
+                card.altura = nova
+                mudou = True
+        if mudou:
+            self._reposicionar()
+
+    def _reposicionar(self, desde=0):
+        """Recoloca os cartões a partir de um deles e refaz a região
+        rolável. São duas contas por cartão — nada de layout do Tk."""
+        canvas = self.scroll_canvas
+        y = MARGEM_Y_PX
+        if desde > 0:
+            anterior = self.cards[desde - 1]
+            y = anterior.y + anterior.altura + ESPACO_ENTRE_CARTOES_PX
+        for card in self.cards[desde:]:
+            if card.y != y:
+                card.y = y
+                canvas.coords(card.item, MARGEM_X_PX, y)
+            y += card.altura + ESPACO_ENTRE_CARTOES_PX
+        self._altura_total = max(y - ESPACO_ENTRE_CARTOES_PX + MARGEM_Y_PX,
+                                 canvas.winfo_height())
+        canvas.configure(scrollregion=(0, 0,
+                                       self.largura_do_cartao() + 2 * MARGEM_X_PX,
+                                       self._altura_total))
+
+    def remover_item(self, card):
+        """Tira o cartão do canvas. Quem reposiciona é o `_sync_cards`,
+        depois de a lista já estar sem ele."""
+        if card.item is not None:
+            self.scroll_canvas.delete(card.item)
+            card.item = None
+
+    def largura_do_cartao(self):
+        """Quantos pixels de largura cada cartão tem."""
+        return max(LARGURA_MINIMA_PX + RECHEIO_PX,
+                   self.scroll_canvas.winfo_width() - 2 * MARGEM_X_PX)
 
     def _on_canvas_configure(self, event):
         """A janela mudou de tamanho.
 
-        Aqui NÃO se mexe em nada: mudar a largura dos cartões faz o Tk
-        remontar o layout da lista inteira, e arrastar a borda da janela
-        dispara isso dezenas de vezes por segundo. Só anota o tamanho
-        novo e marca a hora — quem age é o `_refazer_graficos`, quando o
-        arrasto para.
+        Aqui NÃO se mexe em nada: mudar a largura dos cartões refaz o
+        layout de todos eles, e arrastar a borda da janela dispara isso
+        dezenas de vezes por segundo. Só anota o tamanho novo e marca a
+        hora — quem age é o `_refazer_graficos`, quando o arrasto para.
         """
         largura = max(LARGURA_MINIMA_PX + MARGEM_DO_CARTAO_PX, event.width)
         if abs(largura - self._largura_anterior) <= 4:
@@ -611,22 +852,21 @@ class App(tk.Tk):
     def _refazer_graficos(self):
         """O arrasto parou: agora sim os cartões vão pra largura nova."""
         self._resize_job = None
-        self._geometria_suja = True
         self._abandonar_desenho()  # o que estava sendo desenhado é da largura velha
-        self.scroll_canvas.itemconfigure(self._window_id, width=self._largura_anterior)
+        largura = self.largura_do_cartao()
         for card in self.cards:
+            self.scroll_canvas.itemconfigure(card.item, width=largura)
             card.drawn_key = None   # a largura mudou: todo mundo venceu
+        # a largura nova pode mudar a altura de quem tem aviso comprido
+        for card in self.cards:
+            self.medir_cartao(card)
+        self._reposicionar()
         self._schedule_draw()
 
     def largura_do_grafico(self):
         """Quantos pixels de largura o gráfico tem dentro do cartão."""
         return max(LARGURA_MINIMA_PX,
                    self.scroll_canvas.winfo_width() - MARGEM_DO_CARTAO_PX)
-
-    def _on_cards_configure(self, event):
-        # a região rolável é exatamente o tamanho do frame dos cartões —
-        # mais barato (e mais estável) que pedir `bbox("all")` ao canvas
-        self.scroll_canvas.configure(scrollregion=(0, 0, event.width, event.height))
 
     def _on_mousewheel(self, event):
         self.scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -639,15 +879,22 @@ class App(tk.Tk):
     # ---------- ações dos botões / controles ----------
 
     def load_samples(self):
+        """O botão 1. O que ele abre depende da fonte escolhida."""
+        if self.fonte["tipo"] == CONCENTRACOES:
+            self._load_planilha()
+        else:
+            self._load_txts()
+
+    def _load_txts(self):
+        """Um .txt do XRF por amostra — o caminho de sempre."""
         paths = filedialog.askopenfilenames(
-            title="Selecione os arquivos .txt da batelada",
-            filetypes=[("Arquivos de texto", "*.txt")],
+            title=self.fonte["dialogo"], filetypes=self.fonte["filtros"],
         )
         if not paths:
             return
         for path in paths:
             try:
-                elements = parse_frx_file(path)
+                elements = parse_xrf_file(path)
             except ValueError as err:
                 messagebox.showerror("Erro ao ler arquivo", str(err))
                 continue
@@ -656,6 +903,41 @@ class App(tk.Tk):
         # só os cartões novos são criados; os que já estavam na tela
         # continuam de pé, com o gráfico deles intacto
         self._sync_cards()
+
+    def _load_planilha(self):
+        """Uma planilha só, com a batelada inteira dentro.
+
+        A unidade sai do cabeçalho da própria planilha, então a tabela
+        mostra o que estiver escrito lá (mg/kg, %, ppm…).
+        """
+        path = filedialog.askopenfilename(
+            title=self.fonte["dialogo"], filetypes=self.fonte["filtros"],
+        )
+        if not path:
+            return
+        try:
+            amostras, unidade, ignoradas = parse_planilha(path)
+        except ValueError as err:
+            messagebox.showerror("Erro ao ler a planilha", str(err))
+            return
+        except Exception as err:                      # arquivo corrompido, etc.
+            messagebox.showerror("Erro ao ler a planilha",
+                                 "%s:\n%s" % (os.path.basename(path), err))
+            return
+
+        # a planilha traz a batelada inteira: recomeçar é o que faz
+        # sentido, senão abrir a mesma planilha de novo duplicaria tudo
+        self._descartar_amostras()
+        self.unidade = unidade
+        self.samples.extend(amostras)
+        self._sync_cards()
+
+        aviso = "%d amostra(s) lida(s) de %s." % (len(amostras),
+                                                  os.path.basename(path))
+        if ignoradas:
+            aviso += ("\n\nFicaram de fora, por não terem nenhum valor "
+                      "numérico: %s." % ", ".join(ignoradas))
+        messagebox.showinfo("Planilha carregada", aviso)
 
     def load_mapping(self):
         path = filedialog.askopenfilename(
@@ -670,9 +952,95 @@ class App(tk.Tk):
         )
         self.refresh()
 
+    def on_fonte_change(self, event=None):
+        """Troca entre calcular por áreas e por concentrações.
+
+        As duas não convivem na mesma lista: meia tela em cps e meia em
+        mg/kg daria uma pizza sem significado. Por isso, se já houver
+        amostras carregadas, a troca pergunta antes e recomeça do zero.
+        """
+        escolhida = FONTES[self.fonte_var.get()]
+        if escolhida is self.fonte:
+            return
+        if self.samples and not messagebox.askyesno(
+                "Trocar a fonte dos dados",
+                "As %d amostras carregadas saem da lista, porque foram "
+                "calculadas pela outra grandeza.\n\nContinuar?"
+                % len(self.samples),
+                icon=messagebox.WARNING, default=messagebox.NO):
+            self.fonte_var.set(self._nome_da_fonte())   # desfaz a escolha
+            return
+
+        self.fonte = escolhida
+        self.unidade = escolhida["unidade"]
+        self.load_btn.config(text=escolhida["botao"])
+        self._descartar_amostras()
+        self._sync_cards()
+
+    def _nome_da_fonte(self):
+        """O nome da fonte que está valendo, como ele aparece na caixinha."""
+        return next(nome for nome, f in FONTES.items() if f is self.fonte)
+
+    def _descartar_amostras(self):
+        """Esvazia a lista sem perguntar nada. Quem pergunta é quem chama."""
+        if not self.samples:
+            return
+        self._abandonar_desenho()
+        for card in self.cards:
+            card.destroy()
+        self.cards = []
+        self.samples = []
+        self.toggle_all_btn.config(text="Minimizar todas")
+
+    def cabecalhos_da_tabela(self):
+        """Os títulos das colunas da tabela na tela — os mesmos que vão
+        pro arquivo .txt."""
+        return cabecalho_da_tabela(self.fonte["grandeza"], self.unidade)
+
     def on_tube_change(self, event=None):
         self.tube_z = TUBE_OPTIONS[self.tube_var.get()]
         self.refresh()
+
+    def on_tema_change(self):
+        """Alterna entre o modo escuro e o claro.
+
+        Nada é recriado e nenhum estilo é modificado: cada widget passa
+        a apontar para o estilo já pronto do outro tema (veja
+        `interface/tema.py`), e os gráficos são repintados sem serem
+        desenhados de novo. É o que faz a troca ser imediata mesmo com
+        a lista cheia.
+        """
+        anterior, self.tema = self.tema, outro(self.tema)
+        self.cores = pintar_janela(self, self.tema)
+        trocar(self, anterior, self.tema)
+        self.tema_btn.config(text="Modo %s" % outro(self.tema).lower())
+        self.scroll_canvas.configure(background=self.cores["fundo"])
+        for card in self.cards:
+            if card.canvas is not None:
+                card.canvas.get_tk_widget().configure(
+                    background=self.cores["painel"])
+        # ninguém é marcado como vencido: o desenho continua valendo, só
+        # as cores dele é que não. Quem estiver sendo desenhado agora já
+        # sai no tema novo, porque a pintura acontece no fim do desenho.
+        self._schedule_draw()
+
+    def on_tipo_change(self, event=None):
+        """Troca o tipo de gráfico de TODOS os cartões.
+
+        O tipo não entra na chave de estado do cartão (ele é o mesmo pra
+        lista inteira): é mais barato marcar todo mundo como vencido,
+        que é o mesmo caminho de quando a janela muda de largura. A
+        parte barata — nome, avisos, tabela — não depende do tipo e não
+        é refeita.
+        """
+        tipo = self.tipo_var.get()
+        if tipo == self.tipo:
+            return
+        self.tipo = tipo
+        self._abandonar_desenho()   # o que estava no meio é do tipo velho
+        for card in self.cards:
+            card.drawn_key = None
+        self._schedule_draw()
 
     def on_threshold_change(self, value):
         # Isso é chamado a cada pixel que o slider se move, então só
@@ -733,12 +1101,32 @@ class App(tk.Tk):
         self._schedule_draw()
 
     def remove_sample(self, card):
-        self._geometria_suja = True
         if card is self._card_em_desenho:
             self._abandonar_desenho()
         self.samples.remove(card.sample)
         self.cards.remove(card)
         card.destroy()
+        self._sync_cards()
+
+    def remove_all(self):
+        """Esvazia a lista inteira de uma vez.
+
+        Pergunta antes, e a resposta que já vem escolhida é o NÃO:
+        uma batelada de 60 arquivos custa caro de recarregar, então
+        nem o clique errado no botão, nem o Enter batido em seguida,
+        podem levar a lista embora.
+        """
+        if not self.samples:
+            return
+        if not messagebox.askyesno(
+                "Remover todas",
+                "Tem certeza que quer remover todas as %d amostras?"
+                % len(self.samples),
+                icon=messagebox.WARNING, default=messagebox.NO):
+            return
+        # a fila de desenho aponta pra cartões que não existem mais; quem
+        # limpa é o `_schedule_draw`, no fim do `_sync_cards`
+        self._descartar_amostras()
         self._sync_cards()
 
     # ---------- montagem de nomes ----------
@@ -762,7 +1150,7 @@ class App(tk.Tk):
         da janela, esta não."""
         kept, _, major, trace, total = self._dados_da_amostra(sample)
         return build_sample_figure(kept, major, trace, total,
-                                   self.display_name_for(sample))
+                                   self.display_name_for(sample), self.tipo)
 
     def bloco_de_texto(self, sample):
         """A tabela de uma amostra como texto — a mesma no botão do
@@ -770,9 +1158,10 @@ class App(tk.Tk):
         _, removed, major, trace, total = self._dados_da_amostra(sample)
         return bloco_da_amostra(
             self.display_name_for(sample), sample["code"],
-            linhas_da_tabela(major, trace, total), total,
+            linhas_da_tabela(major, trace, total, self.fonte["formatar"]), total,
             self.threshold, self.tube_var.get(),
-            [e["symbol"] for e in removed])
+            [e["symbol"] for e in removed],
+            self.fonte["grandeza"], self.unidade, self.fonte["formatar"])
 
     def export_all(self, modo):
         """Salva a batelada inteira. O `modo` diz o quê:
@@ -852,10 +1241,12 @@ class App(tk.Tk):
         try:
             kept, removed, major, trace, total = self._dados_da_amostra(sample)
             bloco = bloco_da_amostra(
-                nome, sample["code"], linhas_da_tabela(major, trace, total), total,
-                self.threshold, self.tube_var.get(), [e["symbol"] for e in removed])
+                nome, sample["code"],
+                linhas_da_tabela(major, trace, total, self.fonte["formatar"]), total,
+                self.threshold, self.tube_var.get(), [e["symbol"] for e in removed],
+                self.fonte["grandeza"], self.unidade, self.fonte["formatar"])
 
-            fig = build_sample_figure(kept, major, trace, total, nome)
+            fig = build_sample_figure(kept, major, trace, total, nome, self.tipo)
             try:
                 if estado["individuais"]:
                     base = self._nome_livre(nome, sample["code"], estado["usados"])
@@ -883,7 +1274,8 @@ class App(tk.Tk):
         try:
             if estado["compilado"]:
                 texto = documento_compilado(estado["blocos"], self.threshold,
-                                            self.tube_var.get(), bool(self.name_mapping))
+                                            self.tube_var.get(), bool(self.name_mapping),
+                                            self._nome_da_fonte())
                 estado["arquivos"].append(escrever_texto(
                     caminho_livre(estado["pasta"], "todas as amostras", ".txt"), texto))
                 estado["arquivos"].append(estado["pilha"].salvar(
@@ -927,9 +1319,16 @@ class App(tk.Tk):
         """Quanto um cartão VAI medir depois de montado.
 
         Serve pra reservar o espaço certo enquanto ele ainda é um
-        retângulo vazio; se o palpite estivesse longe, a barra de
-        rolagem daria um pulo quando o cartão nascesse de verdade.
+        retângulo vazio; se o palpite estivesse longe, a lista daria um
+        pulo quando o cartão nascesse de verdade. O `_correcao` é o que
+        aprendemos comparando o palpite com a medida do primeiro cartão
+        montado (veja `medir_cartao`).
         """
+        return (self._altura_bruta(linhas, com_aviso, minimizado)
+                + self._correcao.get(minimizado, 0))
+
+    def _altura_bruta(self, linhas, com_aviso, minimizado):
+        """O palpite antes da correção: a soma das peças do cartão."""
         if self._alturas is None:
             return ALTURA_CHUTE_PX
         cabecalho, aviso, tabela_base, tabela_linha = self._alturas
@@ -970,13 +1369,11 @@ class App(tk.Tk):
             self._sync_job = None
 
         for sample in self.samples[len(self.cards):len(self.cards) + CARTOES_POR_LOTE]:
-            self.cards.append(SampleCard(self.cards_frame, self, sample))
-            self._geometria_suja = True
+            self.cards.append(SampleCard(self.scroll_canvas, self, sample))
+        self._reposicionar()
 
-        if self.samples:
-            self.empty_label.pack_forget()
-        else:
-            self.empty_label.pack()
+        estado = "hidden" if self.samples else "normal"
+        self.scroll_canvas.itemconfigure(self._item_vazio, state=estado)
 
         # No meio de uma batelada não adianta desenhar: os cartões que
         # ainda vão nascer mudam a posição de todo mundo, e conferir
@@ -1008,7 +1405,8 @@ class App(tk.Tk):
         if self._draw_job is not None:
             self.after_cancel(self._draw_job)
             self._draw_job = None
-        if not any(card.needs_draw or card.table_key != card.state_key
+        if not any(card.needs_draw or card.precisa_repintar
+                   or card.table_key != card.state_key
                    for card in self.cards):
             self._draw_limite = None
             return
@@ -1021,26 +1419,20 @@ class App(tk.Tk):
     def _visible_cards(self):
         """Cartões que estão (ou estão quase) na área visível.
 
-        A passada de geometria do Tk só acontece quando a lista mudou de
-        FORMA (cartão novo, removido, minimizado, largura nova). Rolar
-        não move cartão nenhum — move a janela sobre eles —, então o
-        `canvasy` já basta, e pedir a passada a cada clique da roda
-        custava uns 30 ms à toa.
+        Cada cartão sabe onde está e quanto ocupa (`card.y`, `card.altura`),
+        então isto é aritmética pura: nenhuma pergunta ao Tk, nenhuma
+        passada de geometria. Antes era uma passada por rolagem, uns
+        30 ms cada.
         """
-        if self._geometria_suja:
-            self.cards_frame.update_idletasks()
-            self._geometria_suja = False
         topo = self.scroll_canvas.canvasy(0) - MARGEM_VISIVEL_PX
         base = topo + self.scroll_canvas.winfo_height() + 2 * MARGEM_VISIVEL_PX
         meio = (topo + base) / 2
         visiveis = []
         for card in self.cards:
-            y = card.frame.winfo_y()
-            if y > base:
+            if card.y > base:
                 break  # a lista está em ordem: daqui pra baixo é tudo fora
-            altura = card.frame.winfo_reqheight()
-            if y + altura >= topo:
-                visiveis.append((abs(y + altura / 2 - meio), card))
+            if card.y + card.altura >= topo:
+                visiveis.append((abs(card.y + card.altura / 2 - meio), card))
         # o que está mais no meio da tela primeiro: rolando rápido, é o
         # cartão que a pessoa está olhando que ganha a vez
         visiveis.sort(key=lambda par: par[0])
@@ -1051,7 +1443,6 @@ class App(tk.Tk):
             # ele precisa mostrar o cabeçalho com o nome e os botões
             if not card.montado:
                 card.montar()
-                self._geometria_suja = True  # o cartão real tem outra altura
             if not card.collapsed:
                 prontos.append(card)  # minimizado não tem o que desenhar
         return prontos
@@ -1095,13 +1486,18 @@ class App(tk.Tk):
         self._draw_job = self.after(1, self._draw_next)
 
     def _comecar_cartao(self):
-        """Pega o próximo cartão da fila que ainda precisa de desenho."""
+        """Pega o próximo cartão da fila que tem trabalho a fazer —
+        desenhar do zero, ou só repintar no tema novo."""
         while self._draw_queue:
             card = self._draw_queue.pop(0)
             if card.needs_draw:
                 self._passos = card.iniciar_desenho()
-                self._card_em_desenho = card
-                return True
+            elif card.precisa_repintar:
+                self._passos = card.iniciar_repintura()
+            else:
+                continue
+            self._card_em_desenho = card
+            return True
         return False
 
     def _abandonar_desenho(self):

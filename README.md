@@ -1,18 +1,62 @@
 # PizzasXRF
 
-Catalogador de espectros de FRX: lê os `.txt` do WinQXAS, separa os
-elementos em **majoritários** e **traço**, desenha três pizzas por
-amostra e salva gráfico e tabela.
+Catalogador de espectros de XRF: lê os `.txt` do WinQXAS, separa os
+elementos em **majoritários** e **traço**, desenha três gráficos por
+amostra (total, majoritários e traço) e salva gráfico e tabela.
 
 ## As duas versões
 
 | Onde | O que é |
 | --- | --- |
 | `catalogador_frx.py` (raiz) | A versão com o **banco central de amostras**: pastas e subpastas editáveis por commodity (madeira, carne, soja, …). |
-| `generico/catalogador_frx.py` | Cópia congelada de antes do banco — o catalogador **genérico**, que faz a distinção majoritário/traço de qualquer tipo de amostra, sem pastas e sem commodity. |
+| `generico/catalogador_xrf.py` | O catalogador **genérico**: faz a distinção majoritário/traço de qualquer tipo de amostra, sem pastas e sem commodity. Nasceu como cópia de antes do banco e é onde os **tipos de gráfico** foram adicionados (pizza, rosca, barras, barra empilhada e Pareto). |
 
 As duas são independentes: rodam ao mesmo tempo e não compartilham
-código. Detalhes da versão congelada em [`generico/LEIA-ME.txt`](generico/LEIA-ME.txt).
+código. Detalhes da versão genérica em [`generico/LEIA-ME.txt`](generico/LEIA-ME.txt).
+
+## Áreas ou concentrações (versão genérica)
+
+A primeira caixinha da janela — **"Calcular os gráficos por:"** — escolhe
+de onde vêm os números:
+
+| Opção | O que carregar |
+| --- | --- |
+| **1 — Áreas (.txt do XRF)** | os `.txt` do WinQXAS, um por amostra (obrigatório) e o mapeamento (opcional). O valor de cada elemento é a área do pico, em cps. |
+| **2 — Concentrações (planilha .xlsx)** | a planilha exportada pelo programa de concentrações (obrigatória) e o mapeamento (opcional). A batelada inteira sai da aba **"Resultados"**, uma amostra por linha; o valor é a concentração, na unidade que estiver no cabeçalho (mg/kg). |
+
+Daí pra frente é tudo igual: mesma separação majoritário/traço, mesmos
+gráficos, mesmas tabelas. Muda o rótulo da coluna de valores ("Área
+(cps)" ou "Concentração (mg/kg)") e as casas decimais — concentração de
+0,065 mg/kg não pode virar "0". Célula `-` na planilha quer dizer "não
+detectado" e o elemento simplesmente não entra no gráfico daquela
+amostra.
+
+As duas grandezas não se misturam na mesma tela, então trocar a opção
+limpa as amostras carregadas (o programa avisa antes).
+
+## Tipos de gráfico (versão genérica)
+
+A caixinha **"Tipo de gráfico"** troca o desenho dos três painéis de
+todas as amostras de uma vez, e vale também para as imagens salvas:
+
+| Tipo | Para que serve |
+| --- | --- |
+| **Pizza** (padrão) | O de sempre: a proporção de cada elemento, com os rótulos por fora e linha guia até a fatia. |
+| **Rosca** | A mesma pizza com o miolo vazio. |
+| **Barras** | Uma linha por elemento, da maior para a menor. É o mais legível quando a amostra tem muitos elementos e as fatias viram riscos. |
+| **Barra empilhada** | Uma barra só de 0 a 100%, com legenda. Duas amostras lado a lado se comparam de bater o olho — o que duas pizzas não permitem. |
+| **Pareto** | Barras em pé mais a curva do acumulado: quantos elementos respondem por quase tudo. |
+
+## Modo escuro e claro (versão genérica)
+
+A janela abre no **modo escuro**; o botão no canto de cima à direita
+alterna para o claro e volta. A troca é imediata e não recarrega nada —
+só os gráficos são redesenhados, porque a cor deles é pixel, não estilo.
+
+O que é salvo não segue o tema: o `.png` sai sempre com fundo branco,
+para o arquivo não depender do modo em que a janela estava aberta. As
+janelinhas de abrir/salvar arquivo e os avisos são do Windows, então
+continuam com a cara do sistema.
 
 ## Como rodar
 
@@ -20,6 +64,9 @@ código. Detalhes da versão congelada em [`generico/LEIA-ME.txt`](generico/LEIA
 pip install matplotlib
 python catalogador_frx.py
 ```
+
+Para calcular pelas concentrações (só na versão genérica), também
+`pip install openpyxl`.
 
 O Tkinter e o SQLite já vêm com o Python. No Linux, se o Tkinter faltar:
 `sudo apt install python3-tk`.
@@ -30,7 +77,7 @@ O botão **"Banco de amostras…"** abre a árvore de pastas. Nela dá para:
 
 * criar, renomear, mover, reordenar e apagar pastas em qualquer
   profundidade (`1> madeira`, `1.1> in natura`, `1.1.2> pó`, `2> carne`…);
-* importar `.txt` do FRX direto para dentro de uma pasta;
+* importar `.txt` do XRF direto para dentro de uma pasta;
 * guardar no banco as amostras que já estão abertas na tela;
 * arrastar amostras e pastas de um lugar para outro;
 * procurar amostra por nome ou por código do arquivo;
@@ -42,7 +89,8 @@ batelada com medidas de tubos diferentes descarta o elemento certo em
 cada uma.
 
 Tudo mora num arquivo só — `amostras.db`, na pasta "Catalogador FRX" do
-seu perfil de usuário. Backup é copiar esse arquivo; para o banco ser do
+seu perfil de usuário (a pasta e o programa da raiz ainda usam o nome
+antigo, FRX; só a versão genérica foi renomeada para XRF). Backup é copiar esse arquivo; para o banco ser do
 laboratório inteiro, aponte o programa para um arquivo numa pasta de rede
 em "Abrir outro…".
 

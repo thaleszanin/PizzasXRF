@@ -167,7 +167,7 @@ _POR_SIMBOLO = _normalizar(ELEMENT_COLORS)
 
 
 def color_for(element, fallback_index=0):
-    """Cor de um elemento (o dicionário {"z", "symbol", "area"}).
+    """Cor de um elemento (o dicionário {"z", "symbol", "valor"}).
 
     Sem entrada na lista, devolve a cor posicional de antes — daí o
     `fallback_index`, que é a posição da fatia no gráfico.
