@@ -15,3 +15,24 @@ TRACE_LUMP_COLOR = '#82BBD8'
 # de posicionamento mede o texto de verdade (em pixels) e se ajusta
 # sozinho ao novo tamanho.
 LABEL_FONTSIZE = 9.0
+
+# Cor da grade de fundo dos gráficos de barra (a pizza não tem grade).
+COR_DA_GRADE = '#DDD8CC'
+# Cor da curva de % acumulada do gráfico de Pareto.
+COR_DA_CURVA = '#3E5A45'
+
+
+def formatar_pct(valor):
+    """O texto de uma porcentagem, do mesmo jeito em todos os gráficos.
+
+    Uma casa decimal, que é o suficiente pra quase tudo — mas o traço
+    de uma amostra tem elemento de 0,03% do total, e com uma casa só
+    todos eles viravam o mesmo "0.0%" inútil. Abaixo de 0,1% a segunda
+    casa entra; abaixo de 0,005%, nem ela resolve, e aí o texto diz
+    isso mesmo.
+    """
+    if valor >= 0.1:
+        return "%.1f%%" % valor
+    if valor >= 0.005:
+        return "%.2f%%" % valor
+    return "<0.01%"

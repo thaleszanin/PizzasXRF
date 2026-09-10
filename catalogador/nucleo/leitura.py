@@ -1,7 +1,7 @@
 """Leitura dos arquivos de entrada.
 
 Duas fontes:
-  - o .txt de saída do FRX (formato WinQXAS);
+  - o .txt de saída do XRF (formato WinQXAS);
   - o .csv/.txt de mapeamento "código do arquivo -> nome real da amostra".
 
 Nada aqui sabe da interface gráfica.
@@ -12,11 +12,13 @@ import os
 from .tabela_periodica import PERIODIC_TABLE
 
 
-def parse_frx_file(path):
-    """Lê um .txt do FRX e devolve uma lista de dicionários, um por
+def parse_xrf_file(path):
+    """Lê um .txt do XRF e devolve uma lista de dicionários, um por
     elemento (Z), já com as áreas de linhas repetidas somadas.
 
-    Cada item: {"z": int, "symbol": str, "area": float}
+    Cada item: {"z": int, "symbol": str, "valor": float} — aqui o valor
+    é a ÁREA do pico. A planilha de concentrações (nucleo/planilha.py)
+    devolve a mesma forma, com a concentração no lugar.
     """
     with open(path, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
@@ -41,14 +43,15 @@ def parse_frx_file(path):
             continue
         try:
             z = int(float(parts[0]))
-            area = float(parts[2])
+            valor = float(parts[2])
         except ValueError:
             continue  # linha não numérica, ignora
 
         if z in by_z:
-            by_z[z]["area"] += area
+            by_z[z]["valor"] += valor
         else:
-            by_z[z] = {"z": z, "symbol": PERIODIC_TABLE.get(z, f"Z{z}"), "area": area}
+            by_z[z] = {"z": z, "symbol": PERIODIC_TABLE.get(z, f"Z{z}"),
+                       "valor": valor}
 
     return list(by_z.values())
 

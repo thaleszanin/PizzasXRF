@@ -54,10 +54,10 @@ dele (em pixels, já considerando fonte/DPI de verdade) e:
 
 import math
 
-from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.lines import Line2D
 
-from .estilo import LABEL_FONTSIZE
+from .estilo import LABEL_FONTSIZE, formatar_pct
+from .medicao import escala, renderer_para_medir
 
 # Eixo em que uma pizza é desenhada quando ninguém impõe outro tamanho.
 LIMITES_PADRAO = (-1.9, 1.9, -1.5, 1.5)
@@ -65,34 +65,8 @@ LIMITES_PADRAO = (-1.9, 1.9, -1.5, 1.5)
 RAIO_DOS_ROTULOS = 1.15
 # Quantas vezes, no máximo, a checagem de sobreposição roda (passos 6 e 7).
 CICLOS_DE_SEGURANCA = 3
-
-
-def _renderer(fig):
-    """Devolve um renderer só pra MEDIR texto, sem desenhar nada.
-
-    Medir a caixa de um `ax.text` precisa de um renderer, não de um
-    desenho pronto. Antes isso era feito com `fig.canvas.draw()`, que
-    redesenhava as TRÊS pizzas da figura inteira a cada medição — era
-    de longe a parte mais cara do programa.
-    """
-    canvas = fig.canvas
-    if canvas is None or not hasattr(canvas, "get_renderer"):
-        canvas = FigureCanvasAgg(fig)
-    return canvas.get_renderer()
-
-
-def _escala(ax):
-    """Coeficientes da conversão dados -> pixels: px = sx*x + tx e
-    py = sy*y + ty.
-
-    `ax.transData` é afim e alinhada aos eixos, então esses quatro
-    números descrevem a transformação inteira. Fazer a conta na mão
-    evita milhares de chamadas a `transform()`/`inverted()` (cada uma
-    monta e desmonta arrays do numpy) durante a busca binária do
-    layout dos rótulos.
-    """
-    (x0, y0), (x1, y1) = ax.transData.transform([(0.0, 0.0), (1.0, 1.0)])
-    return x1 - x0, x0, y1 - y0, y0
+# Cor da linha fina que liga cada rótulo à fatia dele.
+COR_DA_LINHA_GUIA = "#6B6250"
 
 
 class RotulosDaPizza:
@@ -149,8 +123,8 @@ class RotulosDaPizza:
         # do desenho, e aqui chamamos direto pra ter as coordenadas finais
         # sem pagar por um desenho completo da figura.
         ax.apply_aspect()
-        renderer = _renderer(fig)
-        sx, tx, sy, ty = _escala(ax)
+        renderer = renderer_para_medir(fig)
+        sx, tx, sy, ty = escala(ax)
 
         def measure(t):
             bb = t.get_window_extent(renderer)
@@ -429,7 +403,7 @@ class RotulosDaPizza:
             data_ys.append(new_y)
             linha = Line2D(
                 [it["anchor"][0], new_x], [it["anchor"][1], new_y],
-                color="#6B6250", linewidth=0.6, zorder=1,
+                color=COR_DA_LINHA_GUIA, linewidth=0.6, zorder=1,
             )
             ax.add_line(linha)
             self._linhas.append(linha)
@@ -455,7 +429,7 @@ class RotulosDaPizza:
         # o `set_ylim` acima mudou a caixa do eixo (aspecto "equal"), então
         # a conversão dados <-> pixels precisa ser recalculada antes de medir
         ax.apply_aspect()
-        sx, tx, sy, ty = _escala(ax)
+        sx, tx, sy, ty = escala(ax)
         left, right = ax.get_xlim()
         for it in items:
             bb = it["text"].get_window_extent(renderer)
@@ -469,15 +443,23 @@ class RotulosDaPizza:
         return left, right, bottom, top
 
 
-def _criar_pizza(ax, sizes, labels, colors, radius):
+def _criar_pizza(ax, sizes, labels, colors, radius, buraco=0.0):
     """Desenha as fatias e cria os rótulos na posição natural de cada
-    uma (na ponta da própria fatia). Ninguém foi posicionado ainda."""
+    uma (na ponta da própria fatia). Ninguém foi posicionado ainda.
+
+    `buraco` é a fração do raio que fica vazia no meio (0 = pizza
+    cheia, 0.45 = rosca). O anel dos rótulos não muda: eles continuam
+    pendurados na BORDA DE FORA, que é onde a linha guia começa.
+    """
     if not sizes:
         return None
 
+    fatias = dict(edgecolor="white", linewidth=0.6)
+    if buraco > 0:
+        fatias["width"] = radius * (1.0 - buraco)
     wedges, _ = ax.pie(
         sizes, colors=colors, startangle=90, radius=radius,
-        wedgeprops=dict(edgecolor="white", linewidth=0.6),
+        wedgeprops=fatias,
     )
 
     label_radius = RAIO_DOS_ROTULOS
@@ -487,7 +469,7 @@ def _criar_pizza(ax, sizes, labels, colors, radius):
         x, y = math.cos(mid_angle), math.sin(mid_angle)
         ha = "left" if x >= 0 else "right"
         t = ax.text(
-            x * label_radius, y * label_radius, f"{label} {size:.1f}%",
+            x * label_radius, y * label_radius, "%s %s" % (label, formatar_pct(size)),
             fontsize=LABEL_FONTSIZE, ha=ha, va="center",
         )
         texts.append(t)
@@ -496,15 +478,19 @@ def _criar_pizza(ax, sizes, labels, colors, radius):
     return RotulosDaPizza(ax, texts, anchors, radius)
 
 
-def passos_da_pizza(ax, sizes, labels, colors, radius=1.0):
+def passos_da_pizza(ax, sizes, labels, colors, radius=1.0, buraco=0.0):
     """Desenha a pizza em dois pedaços: primeiro as fatias e a criação
     dos rótulos, depois o POSICIONAMENTO deles (que é a parte cara), com
     um `yield` no meio. Devolve o `RotulosDaPizza` no fim.
 
     Partir em dois é o que deixa a interface desenhar sem travar; veja
     `passos_do_desenho` em `graficos/figura.py`.
+
+    Com `buraco` > 0 sai uma ROSCA em vez de uma pizza — o resto
+    (rótulos, linhas guia, tamanho comum entre os três gráficos) é
+    exatamente o mesmo.
     """
-    rotulos = _criar_pizza(ax, sizes, labels, colors, radius)
+    rotulos = _criar_pizza(ax, sizes, labels, colors, radius, buraco)
     yield
     if rotulos is not None:
         rotulos.posicionar()

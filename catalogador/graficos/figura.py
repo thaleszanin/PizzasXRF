@@ -1,11 +1,17 @@
-"""Monta a figura completa de uma amostra: as três pizzas lado a lado."""
+"""Monta a figura completa de uma amostra: os três gráficos lado a lado.
+
+Os três painéis são sempre os mesmos — Total, Majoritários (com o traço
+agrupado numa fatia só) e Traço renormalizado a 100% —, e o TIPO de
+gráfico usado neles é escolhido de fora: pizza, rosca, barras, barra
+empilhada ou Pareto. Quem tem a lista é `graficos/tipos.py`.
+"""
 
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 from .estilo import TRACE_LUMP_COLOR
 from .cores import colors_for
-from .pizza import passos_da_pizza
+from .tipos import TIPO_PADRAO, desenhador
 
 
 FIG_SIZE = (14, 4.4)
@@ -19,10 +25,10 @@ RODADAS_DE_AJUSTE = 3
 TOLERANCIA = 0.005
 
 
-def build_sample_figure(elements, major, trace, total, title):
+def build_sample_figure(elements, major, trace, total, title, tipo=TIPO_PADRAO):
     """Devolve uma figura matplotlib NOVA com os três gráficos da
-    amostra: total, majoritários (com a fatia "Traço" agrupada) e traço
-    renormalizado a 100%."""
+    amostra: total, majoritários (com o grupo "Traço" agrupado) e traço
+    renormalizado a 100%. `tipo` é um dos nomes de `graficos/tipos.py`."""
     # `Figure` direto em vez de `plt.subplots`: o pyplot guardaria a
     # figura numa lista global (vazando memória a cada redesenho) e, com
     # o backend TkAgg, ainda criaria uma janela Tk escondida por figura.
@@ -30,10 +36,10 @@ def build_sample_figure(elements, major, trace, total, title):
     # FigureCanvasTkAgg depois.
     fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
     FigureCanvasAgg(fig)
-    return draw_sample_figure(fig, elements, major, trace, total, title)
+    return draw_sample_figure(fig, elements, major, trace, total, title, tipo)
 
 
-def draw_sample_figure(fig, elements, major, trace, total, title):
+def draw_sample_figure(fig, elements, major, trace, total, title, tipo=TIPO_PADRAO):
     """Igual ao `build_sample_figure`, mas desenha numa figura que já
     existe (limpando o que havia nela) em vez de criar outra.
 
@@ -41,12 +47,49 @@ def draw_sample_figure(fig, elements, major, trace, total, title):
     widget Tk do cartão de pé — recriar o canvas a cada mudança de
     slider custava muito mais caro que o desenho em si.
     """
-    for _ in passos_do_desenho(fig, elements, major, trace, total, title):
+    for _ in passos_do_desenho(fig, elements, major, trace, total, title, tipo):
         pass
     return fig
 
 
-def passos_do_desenho(fig, elements, major, trace, total, title):
+def paineis(elements, major, trace, total):
+    """Os três painéis de uma amostra, cada um como
+    (título, valores em %, rótulos, cores).
+
+    É a única parte que sabe o que os três gráficos SIGNIFICAM; o tipo
+    de gráfico escolhido só recebe listas de números.
+    """
+    todos = sorted(elements, key=lambda e: -e["valor"])
+    total_painel = ("Total",
+                    [e["valor"] / total * 100 for e in todos],
+                    [e["symbol"] for e in todos],
+                    colors_for(todos))
+
+    # os majoritários um a um, mais UMA fatia com todo o traço somado
+    sizes = [e["valor"] / total * 100 for e in major]
+    labels = [e["symbol"] for e in major]
+    colors = colors_for(major)
+    if trace:
+        sizes.append(sum(e["valor"] for e in trace) / total * 100)
+        labels.append("Traço")
+        colors.append(TRACE_LUMP_COLOR)
+    maiores = ("Majoritários", sizes, labels, colors)
+
+    # o traço sozinho, renormalizado: aqui 100% é o traço inteiro, senão
+    # todas as fatias seriam finas demais pra enxergar
+    if trace:
+        soma = sum(e["valor"] for e in trace)
+        tracos = ("Traço",
+                  [e["valor"] / soma * 100 for e in trace],
+                  [e["symbol"] for e in trace],
+                  colors_for(trace))
+    else:
+        tracos = ("Traço", [], [], [])
+
+    return [total_painel, maiores, tracos]
+
+
+def passos_do_desenho(fig, elements, major, trace, total, title, tipo=TIPO_PADRAO):
     """O MESMO desenho, só que em pedaços: um `yield` entre uma etapa e
     outra.
 
@@ -58,44 +101,25 @@ def passos_do_desenho(fig, elements, major, trace, total, title):
     fig.clear()
     axes = fig.subplots(1, 3)
     fig.suptitle(title, fontsize=10)
+    desenha = desenhador(tipo)
     yield
 
-    # ---- gráfico 1: TOTAL (todos os elementos, sem distinção de grupo) ----
-    all_sorted = sorted(elements, key=lambda e: -e["area"])
-    labels = [e["symbol"] for e in all_sorted]
-    sizes = [e["area"] / total * 100 for e in all_sorted]
-    colors = colors_for(all_sorted)
-    rotulos = [(yield from passos_da_pizza(axes[0], sizes, labels, colors))]
-    axes[0].set_title("Total", fontsize=9)
-    yield
-
-    # ---- gráfico 2: MAJORITÁRIOS (individuais + fatia "traço" agrupada) ----
-    labels = [e["symbol"] for e in major]
-    sizes = [e["area"] / total * 100 for e in major]
-    colors = colors_for(major)
-    if trace:
-        trace_sum = sum(e["area"] for e in trace)
-        labels.append("Traço")
-        sizes.append(trace_sum / total * 100)
-        colors.append(TRACE_LUMP_COLOR)
-    rotulos.append((yield from passos_da_pizza(axes[1], sizes, labels, colors)))
-    axes[1].set_title("Majoritários", fontsize=9)
-    yield
-
-    # ---- gráfico 3: TRAÇO renormalizado a 100% ----
-    if trace:
-        trace_total = sum(e["area"] for e in trace)
-        t_labels = [e["symbol"] for e in trace]
-        t_sizes = [e["area"] / trace_total * 100 for e in trace]
-        t_colors = colors_for(trace)
-        rotulos.append((yield from passos_da_pizza(axes[2], t_sizes, t_labels, t_colors)))
-    axes[2].set_title("Traço", fontsize=9)
-
-    yield
+    rotulos = []
+    for ax, (titulo, sizes, labels, colors) in zip(axes, paineis(elements, major, trace, total)):
+        if sizes:
+            rotulos.append((yield from desenha(ax, sizes, labels, colors)))
+        else:
+            # painel sem nada (amostra sem traço): sem eixo nem grade,
+            # senão sobra uma caixa vazia com números de 0 a 1 dentro
+            ax.set_axis_off()
+        ax.set_title(titulo, fontsize=9)
+        yield
 
     fig.tight_layout(w_pad=2.0)
     yield
 
+    # só os tipos redondos devolvem rótulos pra igualar; os de barra
+    # devolvem None, e aí não há tamanho comum a acertar
     yield from _igualar_pizzas([r for r in rotulos if r is not None])
 
 

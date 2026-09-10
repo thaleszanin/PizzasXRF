@@ -12,6 +12,5 @@ import matplotlib
 matplotlib.use("TkAgg")
 
 from .app import App
-from .banco_view import BancoView
 
-__all__ = ["App", "BancoView"]
+__all__ = ["App"]

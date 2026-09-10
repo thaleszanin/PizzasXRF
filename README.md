@@ -13,18 +13,19 @@ diferentes.
 | Programa | O que é |
 | --- | --- |
 | `pre_analise_xrf.py` | A **pré-análise**: roda antes do catalogador e diz quais elementos saíram com erro alto demais e precisam ser tirados antes de refazer a análise. |
-| `catalogador_frx.py` / `generico/catalogador_xrf.py` | O **catalogador** de espectros, nas duas versões descritas abaixo. |
+| `catalogador_xrf.py` / `generico/catalogador_xrf.py` | O **catalogador** de espectros, nas duas versões descritas abaixo. |
 | `corretor_ag_au_rh.py` | O **corretor**, que reconcilia uma batelada medida em até 3 tubos. |
 
 ## As duas versões do catalogador
 
 | Onde | O que é |
 | --- | --- |
-| `catalogador_frx.py` (raiz) | A versão com o **banco central de amostras**: pastas e subpastas editáveis por commodity (madeira, carne, soja, …). |
+| `catalogador_xrf.py` (raiz) | A versão que ganha o **banco central de amostras**: pastas e subpastas editáveis por commodity (madeira, carne, soja, …). **No momento ela é uma cópia exata da genérica** — foi zerada nessa base para receber o banco de novo, já em cima dos tipos de gráfico, do tema escuro e das concentrações. O banco antigo está no histórico, no commit `89b0188`. |
 | `generico/catalogador_xrf.py` | O catalogador **genérico**: faz a distinção majoritário/traço de qualquer tipo de amostra, sem pastas e sem commodity. Nasceu como cópia de antes do banco e é onde os **tipos de gráfico** foram adicionados (pizza, rosca, barras, barra empilhada e Pareto). |
 
 As duas são independentes: rodam ao mesmo tempo e não compartilham
-código. Detalhes da versão genérica em [`generico/LEIA-ME.txt`](generico/LEIA-ME.txt).
+código — hoje o código das duas é o mesmo, e volta a divergir quando o
+banco for reconstruído na da raiz. Detalhes da versão genérica em [`generico/LEIA-ME.txt`](generico/LEIA-ME.txt).
 
 ## Áreas ou concentrações (versão genérica)
 
@@ -74,7 +75,7 @@ continuam com a cara do sistema.
 
 ```
 pip install matplotlib
-python catalogador_frx.py
+python catalogador_xrf.py
 ```
 
 (A pré-análise é um programa à parte — veja a seção dela mais abaixo.)
