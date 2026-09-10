@@ -1,0 +1,16 @@
+Sub Sobrescrever_A_B_C()
+    Dim c As Range
+    Dim i As Integer
+    Dim ch As String
+
+    For Each c In Selection
+        If Not IsEmpty(c.Value) Then
+            For i = 1 To Len(c.Value)
+                ch = Mid(c.Value, i, 1)
+                If ch = "a" Or ch = "b" Or ch = "c" Then
+                    c.Characters(i, 1).Font.Superscript = True
+                End If
+            Next i
+        End If
+    Next c
+End Sub
