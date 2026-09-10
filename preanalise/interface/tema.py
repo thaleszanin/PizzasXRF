@@ -41,6 +41,7 @@ Os papéis (o nome do estilo sem o tema na frente):
                                   em negrito quando algum elemento
                                   estourou o limite, verde quando não
     Log.TLabel                    o texto do log ao lado da tabela
+    Fator.TLabel                  o fator de normalização, no cabeçalho
     TButton                       o botão azul, o padrão
     Sucesso.TButton               o verde (salvar a batelada)
     Perigo.TButton                o vermelho (remover todas)
@@ -214,6 +215,8 @@ def _estilos_do_tema(root, style, tema):
                     foreground=cores["verde"], font=(FONTE, 9, "bold"))
     style.configure(E("Log.TLabel"), background=cores["painel"],
                     foreground=cores["corpo"])
+    style.configure(E("Fator.TLabel"), background=cores["painel"],
+                    foreground=cores["texto"], font=(FONTE, 9, "bold"))
 
     # dois grupos de botão: os da janela e os de dentro do cartão. A
     # diferença é só o que está atrás deles, e é isso que aparece no

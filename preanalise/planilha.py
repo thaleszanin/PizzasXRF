@@ -11,7 +11,7 @@ amostra.
     │ Resumo do conjunto                        │                  │
     │   3 de 12 amostras precisam ser refeitas… │                  │
     ├───────────────────────────────────────────┼──────────────────┤
-    │ Madeira 123 — arquivo: 081025af           │ Na amostra       │
+    │ Madeira 123 — 081025af — Fator: 1.0342    │ Na amostra       │
     │ Z │ Elemento │ Área │ Erro │ Erro % │ Sit.│ Madeira 123, 2   │
     │ 24│ Cr       │  310 │  968 │ 312.3  │ ERRO│ de 14 elementos  │
     │ 26│ Fe       │ 8140 │  190 │   2.3  │ ok  │ passaram de 50%… │
@@ -29,6 +29,7 @@ dos logs vêm do núcleo, os mesmos que a tela mostra.
 from datetime import date
 
 from .nucleo.avaliacao import SEM_AREA, formatar_pct
+from .nucleo.normalizacao import NOME_DO_FATOR, formatar_fator
 from .nucleo.relatorio import linhas_do_resumo, log_da_amostra
 
 ABA = "Pré-análise"
@@ -134,7 +135,7 @@ def _preparar_aba(ws, estilos):
 
 
 def _escrever_resumo(ws, estilos, linha, amostras, limite, mapeamento_usado,
-                     falhas):
+                     falhas, padrao=None):
     """O log inicial: o cabeçalho da planilha e o resumo da batelada."""
     ultima = COLUNAS_DO_LOG[-1]
     _mesclar(ws, "A", ultima, linha, "Pré-análise XRF", estilos["titulo"])
@@ -145,7 +146,13 @@ def _escrever_resumo(ws, estilos, linha, amostras, limite, mapeamento_usado,
                 "do arquivo de mapeamento" if mapeamento_usado
                 else "código do arquivo (sem mapeamento carregado)"),
              estilos["subtitulo"])
-    linha += 2
+    linha += 1
+    if padrao is not None:
+        _mesclar(ws, "A", ultima, linha,
+                 "%s: área de Ar de %s ÷ área de Ar da amostra"
+                 % (NOME_DO_FATOR, padrao), estilos["subtitulo"])
+        linha += 1
+    linha += 1
 
     _mesclar(ws, "A", ultima, linha, "Resumo do conjunto", estilos["secao"])
     linha += 1
@@ -161,13 +168,32 @@ def _escrever_resumo(ws, estilos, linha, amostras, limite, mapeamento_usado,
     return linha + 1
 
 
-def _escrever_amostra(ws, estilos, linha, amostra, limite):
+def _titulo_da_amostra(amostra, com_fator):
+    """A linha que abre o bloco: o nome, o arquivo e, quando houve
+    amostra padrão, o fator de normalização pelo argônio.
+
+    Sem padrão escolhido o fator não entra — uma coluna de travessões
+    não diz nada a quem abre a planilha meses depois.
+    """
+    titulo = "%s  —  arquivo: %s" % (amostra["nome"], amostra["codigo"])
+    if not com_fator:
+        return titulo
+    fator = amostra.get("fator")
+    texto = formatar_fator(fator)
+    if amostra.get("e_padrao"):
+        texto += " (esta é a amostra padrão)"
+    elif fator is None:
+        texto += " (%s)" % (amostra.get("motivo_fator") or "sem fator")
+    return "%s  —  %s: %s" % (titulo, NOME_DO_FATOR, texto)
+
+
+def _escrever_amostra(ws, estilos, linha, amostra, limite, com_fator=False):
     """Um bloco: o nome, a tabela dos elementos e o log ao lado."""
     avaliacao = amostra["avaliacao"]
     primeira = linha
 
     _mesclar(ws, "A", COLUNAS[-1][0], linha,
-             "%s  —  arquivo: %s" % (amostra["nome"], amostra["codigo"]),
+             _titulo_da_amostra(amostra, com_fator),
              estilos["amostra"], estilos["esquerda"])
     for letra, _, _ in COLUNAS:
         celula = ws["%s%d" % (letra, linha)]
@@ -230,13 +256,19 @@ def _escrever_amostra(ws, estilos, linha, amostra, limite):
     return linha + 1
 
 
-def exportar(caminho, amostras, limite, mapeamento_usado=False, falhas=()):
+def exportar(caminho, amostras, limite, mapeamento_usado=False, falhas=(),
+             padrao=None):
     """Escreve a planilha e devolve o caminho.
 
     `amostras` é a lista de {"nome", "codigo", "avaliacao"} — a avaliação
     é a que `nucleo.avaliar` devolveu, com o mesmo limite. `falhas` são
     os arquivos que não deram pra ler, [(arquivo, motivo)]: eles não têm
     bloco, mas aparecem no resumo, senão sumiriam sem ninguém notar.
+
+    `padrao` é o NOME da amostra escolhida como padrão da normalização
+    pelo argônio. Passando ele, cada bloco ganha o fator de normalização
+    ao lado do nome — o número vem em "fator" na amostra, calculado por
+    `nucleo.normalizacao`; esta camada nunca recalcula nada.
     """
     openpyxl = _openpyxl()
     livro = openpyxl.Workbook()
@@ -247,9 +279,10 @@ def exportar(caminho, amostras, limite, mapeamento_usado=False, falhas=()):
     _preparar_aba(ws, estilos)
 
     linha = _escrever_resumo(ws, estilos, 1, amostras, limite,
-                             mapeamento_usado, falhas)
+                             mapeamento_usado, falhas, padrao)
     for amostra in amostras:
-        linha = _escrever_amostra(ws, estilos, linha, amostra, limite)
+        linha = _escrever_amostra(ws, estilos, linha, amostra, limite,
+                                  padrao is not None)
 
     livro.save(caminho)
     return caminho

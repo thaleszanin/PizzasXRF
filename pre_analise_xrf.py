@@ -28,7 +28,13 @@ O que ele faz:
      mesmos logs da tela.
   7. Aceita o arquivo de mapeamento (código do arquivo -> nome real da
      amostra), igual aos outros programas.
-  8. Abre no modo escuro; o botão no canto de cima à direita alterna
+  8. Deixa escolher uma AMOSTRA PADRÃO e mostra, ao lado de cada
+     amostra, o Fator de Normalização — a área do pico de argônio do
+     padrão dividida pela da amostra. O argônio vem do ar entre o tubo e
+     o detector, é o mesmo em toda a batelada, e por isso serve de
+     régua: uma amostra que rendeu metade do padrão tem fator 2. O fator
+     aparece na tela e na planilha.
+  9. Abre no modo escuro; o botão no canto de cima à direita alterna
      para o claro.
 
 Como rodar:
@@ -47,6 +53,7 @@ pacote `preanalise/`:
     nucleo/        <- os DADOS (nenhuma interface, nenhum Excel)
       leitura.py        ler_espectro: o .txt COM a coluna do erro
       avaliacao.py      o erro relativo e quem passou do limite
+      normalizacao.py   o fator: o argônio do padrão sobre o da amostra
       relatorio.py      os textos: o log de cada amostra e o resumo
 
     planilha.py    <- o .xlsx: a batelada empilhada, o destaque das
@@ -61,18 +68,26 @@ A dependência anda sempre num sentido só — interface -> planilha ->
 nucleo —, então dá pra rodar a pré-análise de dentro de um script, sem
 abrir janela nenhuma:
 
-    from preanalise.nucleo import avaliar, ler_espectro, log_da_amostra
+    from preanalise.nucleo import (area_do_argonio, avaliar,
+                                   fator_de_normalizacao, ler_espectro,
+                                   log_da_amostra)
     from preanalise.planilha import exportar
+
+    padrao = ler_espectro("081025af.txt")
+    area_padrao = area_do_argonio(padrao)
 
     amostras = []
     for arquivo, nome in (("081025af.txt", "Madeira 123"),
                           ("081025ag.txt", "Madeira 124")):
-        avaliacao = avaliar(ler_espectro(arquivo), limite=50.0)
+        elementos = ler_espectro(arquivo)
+        avaliacao = avaliar(elementos, limite=50.0)
         print(log_da_amostra(nome, avaliacao, 50.0))
-        amostras.append({"nome": nome, "codigo": arquivo[:-4],
-                         "avaliacao": avaliacao})
+        amostras.append({
+            "nome": nome, "codigo": arquivo[:-4], "avaliacao": avaliacao,
+            "fator": fator_de_normalizacao(area_padrao,
+                                           area_do_argonio(elementos))})
 
-    exportar("pre-analise.xlsx", amostras, limite=50.0)
+    exportar("pre-analise.xlsx", amostras, limite=50.0, padrao="Madeira 123")
 
 O mapeamento código->nome é o mesmo dos outros programas, e vem de lá:
 

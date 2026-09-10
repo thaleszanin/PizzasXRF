@@ -8,13 +8,19 @@ dizem de que estilo são ("Erro.TLabel", "Cartao.TButton"…).
 
 O que a tela mostra
 -------------------
-Em cima, os controles e o slider do limite de erro. Embaixo dele, o
-RESUMO DO CONJUNTO — o log inicial, falando de todas as amostras de uma
-vez. E daí pra baixo, um cartão por amostra: a tabela dos elementos,
-ordenada do pior erro pro melhor, com as linhas reprovadas em vermelho e
-negrito, e ao lado dela o log daquela amostra. É a mesma coisa que sai
-no .xlsx, e de propósito: o que você confere na tela é o que o arquivo
-vai ter.
+Em cima, os controles: o slider do limite de erro e a caixa da AMOSTRA
+PADRÃO. Embaixo deles, o RESUMO DO CONJUNTO — o log inicial, falando de
+todas as amostras de uma vez. E daí pra baixo, um cartão por amostra: a
+tabela dos elementos, ordenada do pior erro pro melhor, com as linhas
+reprovadas em vermelho e negrito, e ao lado dela o log daquela amostra.
+É a mesma coisa que sai no .xlsx, e de propósito: o que você confere na
+tela é o que o arquivo vai ter.
+
+No cabeçalho de cada cartão, do lado oposto ao nome, vai o FATOR DE
+NORMALIZAÇÃO: o argônio do padrão dividido pelo argônio daquela amostra
+(a conta é de `nucleo/normalizacao.py`). Enquanto não houver padrão
+escolhido — ou quando faltar o pico de Ar de um dos dois lados —, no
+lugar do número vai o motivo, em cinza.
 
 Sobre desempenho
 ----------------
@@ -53,12 +59,18 @@ from ..nucleo import (
     LIMITE_MAXIMO,
     LIMITE_MINIMO,
     LIMITE_PADRAO,
+    NOME_DO_FATOR,
+    SIMBOLO_ARGONIO,
+    area_do_argonio,
     avaliar,
     codigo_do_arquivo,
+    fator_de_normalizacao,
+    formatar_fator,
     formatar_pct,
     ler_espectro,
     linhas_do_resumo,
     log_da_amostra,
+    motivo_sem_fator,
     plural,
     resumo_da_amostra,
 )
@@ -111,6 +123,10 @@ COLUNAS = (
     ("situacao", "Situação", 120, "center"),
 )
 SITUACAO_ALTA, SITUACAO_OK = "ERRO ALTO", "ok"
+
+# A primeira opção da caixa da amostra padrão: sem padrão, ninguém tem
+# fator de normalização.
+SEM_PADRAO = "Nenhuma (sem normalização)"
 
 # Quantas linhas o resumo mostra sem precisar rolar.
 LINHAS_DO_RESUMO = 7
@@ -197,6 +213,12 @@ class CartaoDeAmostra:
         ttk.Button(cabecalho, text="Remover",
                    style=app.estilo("Cartao.Neutro.TButton"),
                    command=lambda: app.remover(self)).pack(side="right")
+        # o fator fica à esquerda do "Remover", no canto oposto ao nome:
+        # ele é o número que se compara ENTRE amostras, e alinhado na
+        # mesma coluna dá pra correr o olho pela lista toda
+        self.rotulo_fator = ttk.Label(cabecalho, text="",
+                                      style=app.estilo("Fator.TLabel"))
+        self.rotulo_fator.pack(side="right", padx=(12, 12))
 
         self.corpo = ttk.Frame(self.frame, style=app.estilo("Painel.TFrame"))
         if not self.minimizado:
@@ -237,6 +259,22 @@ class CartaoDeAmostra:
         self.nome = nome
         self.avaliacao = avaliacao
 
+    def texto_do_fator(self):
+        """O fator desta amostra como ele aparece no cabeçalho.
+
+        Devolve (texto, papel): sem fator, o travessão vem com o motivo
+        entre parênteses e em cinza — um "—" sozinho no canto do cartão
+        vira pergunta na bancada.
+        """
+        fator = self.amostra.get("fator")
+        texto = "%s: %s" % (NOME_DO_FATOR, formatar_fator(fator))
+        if self.amostra.get("e_padrao"):
+            return texto + "  (esta é a amostra padrão)", "Fator.TLabel"
+        if fator is None:
+            return ("%s  (%s)" % (texto, self.amostra.get("motivo_fator") or ""),
+                    "Fraco.TLabel")
+        return texto, "Fator.TLabel"
+
     def aplicar(self):
         """Põe na tela o que a amostra tem agora.
 
@@ -245,7 +283,9 @@ class CartaoDeAmostra:
         """
         if not self.montado:
             return
-        chave = (self.nome, round(self.app.limite, 4), self.minimizado)
+        chave = (self.nome, round(self.app.limite, 4), self.minimizado,
+                 self.amostra.get("fator"), self.amostra.get("motivo_fator"),
+                 self.amostra.get("e_padrao"))
         if chave == self.mostrado:
             return
         self.mostrado = chave
@@ -255,6 +295,11 @@ class CartaoDeAmostra:
         self.rotulo_veredito.configure(
             text=resumo_da_amostra(self.avaliacao),
             style=self.app.estilo("Erro.TLabel" if altos else "Ok.TLabel"))
+        # o fator vive no cabeçalho, então é atualizado ANTES da saída do
+        # cartão minimizado: minimizar esconde a tabela, não o fator
+        texto_fator, papel_fator = self.texto_do_fator()
+        self.rotulo_fator.configure(text=texto_fator,
+                                    style=self.app.estilo(papel_fator))
         if self.minimizado:
             return   # minimizado, o corpo nem está na tela
 
@@ -322,6 +367,8 @@ class App(tk.Tk):
         self.falhas = []          # [(arquivo, motivo)] — os que não abriram
         self.mapeamento = {}      # {"081025af": "Madeira 123", ...}
         self.limite = LIMITE_PADRAO
+        self.codigo_padrao = None  # a amostra padrão da normalização
+        self.opcoes_padrao = {}    # {rótulo na caixa: código da amostra}
         # as medidas do cartão: de palpite agora, medidas no primeiro
         # cartão que nascer
         self.alturas = (CABECALHO_PX, TABELA_BASE_PX, LINHA_DA_TABELA_PX)
@@ -337,6 +384,7 @@ class App(tk.Tk):
         self._montar_acoes()
         self._montar_lista()
         self._atualizar_resumo()
+        self._calcular_fatores()   # com a lista vazia, só escreve o aviso
 
     # ---------- construção ----------
 
@@ -410,6 +458,22 @@ class App(tk.Tk):
         self.rotulo_limite = ttk.Label(linha1, text="%.1f%%" % LIMITE_PADRAO,
                                        style=self.estilo("Secao.TLabel"))
         self.rotulo_limite.pack(side="left", padx=(8, 0))
+
+        ttk.Label(frame, text="Amostra padrão (normalização pelo %s):"
+                             % SIMBOLO_ARGONIO,
+                  style=self.estilo("Secao.TLabel")).grid(row=2, column=0,
+                                                          sticky="w", pady=(12, 0))
+        linha2 = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha2.grid(row=2, column=1, sticky="w", pady=(12, 0))
+        self.padrao_var = tk.StringVar(value=SEM_PADRAO)
+        self.padrao_combo = ttk.Combobox(
+            linha2, textvariable=self.padrao_var, values=[SEM_PADRAO],
+            state="readonly", width=44, style=self.estilo("TCombobox"))
+        self.padrao_combo.pack(side="left")
+        self.padrao_combo.bind("<<ComboboxSelected>>", self.ao_escolher_padrao)
+        self.rotulo_padrao = ttk.Label(linha2, text="",
+                                       style=self.estilo("FracoFundo.TLabel"))
+        self.rotulo_padrao.pack(side="left", padx=(8, 0))
 
     def _montar_resumo(self):
         """O log inicial: o que o conjunto inteiro tem, em cima de tudo.
@@ -661,6 +725,80 @@ class App(tk.Tk):
         """O nome real, se o mapeamento tiver um; senão, o código."""
         return self.mapeamento.get(amostra["codigo"].lower(), amostra["codigo"])
 
+    # ---------- a amostra padrão ----------
+
+    def amostra_padrao(self):
+        """A amostra escolhida como padrão, ou None."""
+        return next((a for a in self.amostras
+                     if a["codigo"] == self.codigo_padrao), None)
+
+    def nome_do_padrao(self):
+        padrao = self.amostra_padrao()
+        return self.nome_da_amostra(padrao) if padrao else None
+
+    def _rotulo_do_padrao(self, amostra):
+        """Como a amostra aparece na caixa de seleção. O código vem junto
+        do nome porque é ele que diz de que arquivo o padrão saiu — dois
+        arquivos podem ter recebido o mesmo nome no mapeamento."""
+        nome = self.nome_da_amostra(amostra)
+        if nome == amostra["codigo"]:
+            return nome
+        return "%s (%s)" % (nome, amostra["codigo"])
+
+    def _atualizar_opcoes_padrao(self):
+        """Refaz a lista da caixa: a batelada ou os nomes mudaram.
+
+        Se a amostra que era o padrão saiu da lista, a normalização volta
+        para o "nenhuma" — deixar ali o nome de uma amostra removida
+        seria mentir sobre de onde os fatores estão saindo.
+        """
+        opcoes = {self._rotulo_do_padrao(a): a["codigo"] for a in self.amostras}
+        if opcoes == self.opcoes_padrao:
+            return   # o slider chega aqui a cada passo, e a lista não mudou
+        self.opcoes_padrao = opcoes
+        self.padrao_combo.configure(
+            values=[SEM_PADRAO] + list(self.opcoes_padrao))
+
+        rotulo = next((r for r, codigo in self.opcoes_padrao.items()
+                       if codigo == self.codigo_padrao), None)
+        if rotulo is None:
+            self.codigo_padrao = None
+        self.padrao_var.set(rotulo or SEM_PADRAO)
+
+    def ao_escolher_padrao(self, event=None):
+        self.codigo_padrao = self.opcoes_padrao.get(self.padrao_var.get())
+        self._recalcular()
+
+    def _calcular_fatores(self):
+        """O fator de normalização de cada amostra, contra o padrão.
+
+        É a área do pico de Ar do padrão dividida pela de cada amostra.
+        Cada uma guarda o fator e, quando não tem, o MOTIVO — sem padrão
+        escolhido, sem Ar no padrão ou sem Ar nela mesma —, que é o que o
+        cartão mostra no lugar do número.
+        """
+        padrao = self.amostra_padrao()
+        area_padrao = area_do_argonio(padrao["elements"]) if padrao else None
+        for amostra in self.amostras:
+            area = area_do_argonio(amostra["elements"])
+            amostra["fator"] = fator_de_normalizacao(area_padrao, area)
+            amostra["motivo_fator"] = motivo_sem_fator(padrao is not None,
+                                                       area_padrao, area)
+            amostra["e_padrao"] = amostra is padrao
+
+        if padrao is None:
+            texto = "Nenhum fator calculado."
+        elif area_padrao is None:
+            texto = ("O padrão não tem pico de %s — sem ele não há fator."
+                     % SIMBOLO_ARGONIO)
+        else:
+            sem = sum(1 for a in self.amostras if a["fator"] is None)
+            texto = "%s do padrão: %.0f cps" % (SIMBOLO_ARGONIO, area_padrao)
+            if sem:
+                texto += "  •  %s sem pico de %s" % (
+                    plural(sem, "amostra", "amostras"), SIMBOLO_ARGONIO)
+        self.rotulo_padrao.configure(text=texto)
+
     # ---------- os números ----------
 
     def _recalcular(self):
@@ -672,6 +810,8 @@ class App(tk.Tk):
         """
         for amostra in self.amostras:
             amostra["avaliacao"] = avaliar(amostra["elements"], self.limite)
+        self._atualizar_opcoes_padrao()
+        self._calcular_fatores()
         for card in self.cards:
             card.atualizar(self.nome_da_amostra(card.amostra),
                            card.amostra["avaliacao"])
@@ -681,7 +821,10 @@ class App(tk.Tk):
     def _amostras_do_relatorio(self):
         """As amostras como o núcleo e a planilha esperam ver."""
         return [{"nome": self.nome_da_amostra(a), "codigo": a["codigo"],
-                 "avaliacao": a["avaliacao"]} for a in self.amostras]
+                 "avaliacao": a["avaliacao"], "fator": a.get("fator"),
+                 "motivo_fator": a.get("motivo_fator"),
+                 "e_padrao": a.get("e_padrao", False)}
+                for a in self.amostras]
 
     def _atualizar_resumo(self):
         self.resumo.configure(state="normal")
@@ -853,7 +996,8 @@ class App(tk.Tk):
         self.update_idletasks()
         try:
             exportar(caminho, self._amostras_do_relatorio(), self.limite,
-                     mapeamento_usado=bool(self.mapeamento), falhas=self.falhas)
+                     mapeamento_usado=bool(self.mapeamento), falhas=self.falhas,
+                     padrao=self.nome_do_padrao())
         except Exception as erro:                # noqa: BLE001
             self.rotulo_exportacao.configure(text="")
             messagebox.showerror("Erro ao exportar", str(erro))
