@@ -149,8 +149,11 @@ bancos abertos voltam sozinhos da próxima vez.
   até ela, ou "Selecionar todas" (respeita a busca). **"Excluir
   selecionadas"** apaga as marcadas de uma vez, com as medições e
   espectros — pergunta antes;
-* na amostra aberta, **"Espectros em escala log/linear"** alterna a
-  escala dos espectros (o eixo de energia é sempre 0–25 keV). A log fica
+* **"Ordenar por"** muda a ordem dos azulejos: pelo nome da amostra ou
+  por qualquer categoria do banco (número ordena como número, vazios no
+  fim);
+* ao lado de cada espectro, **"Ver em escala linear/log"** alterna a
+  escala das contagens (o eixo de energia é sempre 0–25 keV). A log fica
   guardada no banco; a linear é desenhada na hora e fica em memória;
 * todo botão tem uma dica: deixe o mouse parado em cima dele que aparece
   uma linha explicando o que ele faz;

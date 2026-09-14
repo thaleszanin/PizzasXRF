@@ -85,6 +85,22 @@ CAIXA = 16
 CACHE_DE_ESPECTROS = 40
 # De quanto em quanto tempo a tela olha se a oficina já desenhou.
 ESPERA_DA_OFICINA_MS = 60
+# A primeira opção de "Ordenar por": o nome da amostra (as outras são as
+# categorias do banco).
+ORDEM_POR_NOME = "Nome da amostra"
+
+
+def _chave_de_ordem(valor):
+    """Como um valor de categoria se compara com outro: número como
+    número (a latitude -9.37 vem antes de 1.09), texto sem
+    maiúscula/minúscula, e vazio no fim."""
+    texto = (valor or "").strip()
+    if not texto:
+        return (2, 0.0, "")
+    try:
+        return (0, float(texto.replace(",", ".")), "")
+    except ValueError:
+        return (1, 0.0, texto.casefold())
 FONTE = "Segoe UI"
 
 
@@ -265,6 +281,11 @@ class Azulejo:
         if sim != self.visivel:
             self.visivel = sim
             self.canvas.itemconfigure(self.tag, state="normal" if sim else "hidden")
+            # a etiqueta pega TODOS os itens do azulejo, o "✓" inclusive:
+            # ao reaparecer, ele volta a só existir se a amostra está marcada
+            if sim:
+                self.canvas.itemconfigure(
+                    self.marca, state="normal" if self.selecionado else "hidden")
 
     def contem(self, x, y):
         """Se o ponto (em coordenadas do canvas) cai neste azulejo."""
@@ -315,6 +336,7 @@ class AbaDoBanco(ttk.Frame):
         self._visiveis = set()      # os ids que a busca deixa na página
         self.selecionadas = set()   # os ids marcados na caixinha
         self._ancora = None         # a última marcada com clique (pro Shift)
+        self._ordem = {}            # amostra_id -> posição na página
         self.escala = LOG           # como os espectros aparecem na amostra
         self._cache_linear = {}     # espectro_id -> png em escala linear
         self._pedidos = {}          # espectro_id -> (Future, rótulo, args)
@@ -434,6 +456,15 @@ class AbaDoBanco(ttk.Frame):
              "Cria, renomeia, reordena e apaga as categorias (as colunas de "
              "informação) deste banco. As duas primeiras aparecem nos azulejos."
              ).pack(side="left", padx=(18, 0))
+        ttk.Label(linha3, text="Ordenar por:",
+                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
+        self.ordem_var = tk.StringVar(value=ORDEM_POR_NOME)
+        self.ordem_combo = ttk.Combobox(linha3, textvariable=self.ordem_var, state="readonly",
+                                        width=22, style=app.estilo("TCombobox"))
+        self.ordem_combo.pack(side="left")
+        self.ordem_combo.bind("<<ComboboxSelected>>", lambda _e: self.recarregar())
+        dica(self.ordem_combo, "A ordem dos azulejos na página: pelo nome da amostra ou "
+             "por qualquer categoria do banco (número como número, vazios no fim).")
         self.status = ttk.Label(linha3, text="", style=app.estilo("FracoFundo.TLabel"))
         self.status.pack(side="right")
 
@@ -538,6 +569,23 @@ class AbaDoBanco(ttk.Frame):
             texto = "%d de %s" % (len(visiveis), texto)
         self.status.config(text=texto)
 
+        # a ordem da página: por nome (a que o banco devolve) ou por uma
+        # categoria escolhida em "Ordenar por"
+        categorias = self.banco.categorias()
+        opcoes = [ORDEM_POR_NOME] + [c["nome"] for c in categorias]
+        if list(self.ordem_combo.cget("values")) != opcoes:
+            self.ordem_combo.configure(values=opcoes)
+        escolha = self.ordem_var.get()
+        if escolha not in opcoes:
+            escolha = ORDEM_POR_NOME
+            self.ordem_var.set(escolha)
+        if escolha != ORDEM_POR_NOME:
+            coluna = opcoes.index(escolha) - 1
+            todos.sort(key=lambda a: (_chave_de_ordem(
+                (informacoes.get(a["id"]) or [""] * (coluna + 1))[coluna]),
+                a["nome"].casefold()))
+        self._ordem = {a["id"]: i for i, a in enumerate(todos)}
+
         # quem sumiu do banco vai embora; quem já tem azulejo é
         # atualizado (de graça, se nada mudou); quem é novo fica na
         # fila pra nascer em lotes
@@ -589,17 +637,10 @@ class AbaDoBanco(ttk.Frame):
             self._lote_job = self.after(1, self._criar_lote)
 
     def _ordenar(self):
-        """Os azulejos visíveis, na ordem do banco. Só é refeita quando
-        alguém nasce ou morre."""
-        ordem = self._ordem_do_banco()
+        """Os azulejos visíveis, na ordem que `recarregar` decidiu. Só
+        é refeita quando alguém nasce ou morre."""
         self.azulejos = sorted((a for a in self._por_id.values() if a.visivel),
-                               key=lambda a: ordem.get(a.amostra_id, 0))
-
-    def _ordem_do_banco(self):
-        """A posição de cada amostra na ordem por nome (a que
-        `banco.amostras()` devolve) — uma consulta leve, só ids."""
-        return {l[0]: i for i, l in enumerate(self.banco.con.execute(
-            "SELECT id FROM amostras ORDER BY nome COLLATE NOCASE"))}
+                               key=lambda a: self._ordem.get(a.amostra_id, 0))
 
     def _grade(self):
         """(quantas colunas cabem, a largura de cada azulejo): o azulejo
@@ -852,14 +893,6 @@ class AbaDoBanco(ttk.Frame):
              "Troca o nome da amostra. É por ele que o mapeamento e a lista "
              "de amostras a encontram."
              ).pack(side="right", padx=6)
-        dica(ttk.Button(topo, style=app.estilo("Neutro.TButton"), command=self.alternar_escala,
-                        text="Espectros em escala %s" % ("log" if self.escala == LOG
-                                                          else "linear")),
-             "Alterna a escala do eixo de contagens dos espectros desta amostra: "
-             "log (os picos pequenos aparecem ao lado dos grandes) ou linear "
-             "(as alturas ficam proporcionais). Vale para todas as amostras "
-             "deste banco."
-             ).pack(side="right", padx=(0, 12))
         self._nome_aberto = amostra["nome"]
 
         # as informações: uma caixa por categoria
@@ -1017,6 +1050,13 @@ class AbaDoBanco(ttk.Frame):
                         command=lambda: self.excluir_espectro(eid)),
              "Apaga só o espectro (.mca) — a medição, se houver, fica."
              ).pack(side="right")
+        dica(ttk.Button(cabecalho, style=app.estilo("Cartao.Neutro.TButton"),
+                        command=self.alternar_escala,
+                        text="Ver em escala %s" % ("linear" if self.escala == LOG else "log")),
+             "Troca a escala do eixo de contagens: log (os picos pequenos aparecem "
+             "ao lado dos grandes) ou linear (as alturas ficam proporcionais). A "
+             "escolha vale para todos os espectros deste banco."
+             ).pack(side="right", padx=6)
         if espectro["tem_imagem"]:
             dica(ttk.Button(cabecalho, text="Salvar espectro (PNG)",
                             style=app.estilo("Cartao.TButton"),
