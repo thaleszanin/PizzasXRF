@@ -144,6 +144,12 @@ bancos abertos voltam sozinhos da próxima vez.
   a foto (opcional) e cada medição com o gráfico e a tabela;
 * **"Categorias…"** cria, renomeia, reordena e apaga categorias — vale
   para o banco inteiro;
+* cada azulejo tem uma caixinha no canto: marque várias (ou "Selecionar
+  todas", que respeita a busca) e **"Excluir selecionadas"** apaga de uma
+  vez, com as medições e espectros — pergunta antes;
+* na amostra aberta, **"Espectros em escala log/linear"** alterna a
+  escala dos espectros (o eixo de energia é sempre 0–25 keV). A log fica
+  guardada no banco; a linear é desenhada na hora e fica em memória;
 * todo botão tem uma dica: deixe o mouse parado em cima dele que aparece
   uma linha explicando o que ele faz;
 * **"Salvar cópia (.db)…"** baixa o banco num arquivo (o `.db` aberto já

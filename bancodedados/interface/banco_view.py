@@ -62,6 +62,8 @@ from ..banco import (BancoDeAmostras, ErroDoBanco, coluna_sugerida,
                      exportar_json, imagem_ao_lado, ler_planilha,
                      ler_tabela_exportada, separar_chave)
 from ..exportacao import escrever_texto, nome_de_arquivo
+from ..graficos.espectro import LINEAR, LOG, png_do_espectro
+from ..nucleo.mca import desempacotar_contagens, energias_por_canal
 from .dialogos import Dialogo, perguntar_texto
 
 # O azulejo de cada amostra na página.
@@ -76,6 +78,13 @@ IMAGEM_LARGURA_MAX = 1100
 FOTO_LARGURA_MAX = 360
 # O recheio do azulejo e as etiquetas (Ag, Rh, Au) no pé dele.
 RECHEIO, ETIQUETA_RECHEIO, ETIQUETA_ALTURA = 10, 6, 18
+# A caixinha de seleção no canto de cima à direita do azulejo.
+CAIXA = 16
+# Quantos espectros em escala linear ficam guardados na memória (cada
+# um são uns 150 kB): o bastante pra ir e voltar entre amostras.
+CACHE_DE_ESPECTROS = 40
+# De quanto em quanto tempo a tela olha se a oficina já desenhou.
+ESPERA_DA_OFICINA_MS = 60
 FONTE = "Segoe UI"
 
 
@@ -146,6 +155,7 @@ class Azulejo:
         self.chave = None
         self.visivel = True
         self.realcado = False
+        self.selecionado = False
         self._detalhe_inteiro = ""
         # as fontes são da janela (uma vez só), não de cada azulejo
         self._fontes = getattr(aba.app, "fontes_dos_azulejos", None)
@@ -159,6 +169,10 @@ class Azulejo:
         self.nome = c.create_text(0, 0, anchor="nw", font=self._fontes["nome"], tags=(tag,))
         self.detalhe = c.create_text(0, 0, anchor="nw", font=self._fontes["detalhe"],
                                      tags=(tag,))
+        # a caixinha de seleção: um quadrado e o "✓" que só aparece marcado
+        self.caixa = c.create_rectangle(0, 0, 1, 1, width=1, tags=(tag,))
+        self.marca = c.create_text(0, 0, text="\u2713", anchor="center",
+                                   font=self._fontes["chip"], tags=(tag,), state="hidden")
         self.chips = []   # [(retângulo, texto, é_forte)]
         self.atualizar(resumo, informacoes)
         self.pintar()
@@ -198,8 +212,21 @@ class Azulejo:
                                tags=(self.tag,))
         self.chips.append((retangulo, rotulo, forte))
 
+    def na_caixa(self, x, y):
+        """Se o ponto (em coordenadas do canvas) cai na caixinha de
+        seleção — com uma folga em volta, que 16 px é alvo pequeno."""
+        cx1, cy0 = self.x + self.largura - RECHEIO, self.y + RECHEIO
+        return cx1 - CAIXA - 6 <= x <= cx1 + 6 and cy0 - 6 <= y <= cy0 + CAIXA + 6
+
+    def selecionar(self, sim):
+        if sim != self.selecionado:
+            self.selecionado = sim
+            self.canvas.itemconfigure(self.marca, state="normal" if sim else "hidden")
+            self.pintar()
+
     def _ajustar_detalhe(self):
-        largura = self.largura - 2 * RECHEIO
+        # o nome não pode passar por baixo da caixinha
+        largura = self.largura - 2 * RECHEIO - CAIXA - 6
         self.canvas.itemconfigure(
             self.detalhe, text=_cortar(self._detalhe_inteiro, self._fontes["detalhe"], largura))
 
@@ -214,6 +241,9 @@ class Azulejo:
         c.coords(self.fundo, x, y, x + largura, y + AZULEJO_ALTURA)
         c.coords(self.nome, x + RECHEIO, y + RECHEIO)
         c.coords(self.detalhe, x + RECHEIO, y + RECHEIO + 26)
+        cx1, cy0 = x + largura - RECHEIO, y + RECHEIO
+        c.coords(self.caixa, cx1 - CAIXA, cy0, cx1, cy0 + CAIXA)
+        c.coords(self.marca, cx1 - CAIXA / 2, cy0 + CAIXA / 2)
         if mudou_largura:
             self._ajustar_detalhe()
         self._dispor_chips()
@@ -257,6 +287,9 @@ class Azulejo:
                         outline=cores["azul"] if self.realcado else cores["borda"])
         c.itemconfigure(self.nome, fill=cores["texto"])
         c.itemconfigure(self.detalhe, fill=cores["fraco"])
+        c.itemconfigure(self.caixa, fill=cores["azul"] if self.selecionado else cores["campo"],
+                        outline=cores["azul"] if self.selecionado else cores["borda"])
+        c.itemconfigure(self.marca, fill=cores["botao_texto"])
         for retangulo, rotulo, forte in self.chips:
             c.itemconfigure(retangulo, fill=cores["azul"] if forte else cores["neutro"])
             c.itemconfigure(rotulo, fill=cores["botao_texto"] if forte else cores["fraco"])
@@ -280,6 +313,11 @@ class AbaDoBanco(ttk.Frame):
         self._por_id = {}           # amostra_id -> Azulejo (todos, até os escondidos)
         self._pendentes = []        # (resumo, informações) ainda sem azulejo
         self._visiveis = set()      # os ids que a busca deixa na página
+        self.selecionadas = set()   # os ids marcados na caixinha
+        self.escala = LOG           # como os espectros aparecem na amostra
+        self._cache_linear = {}     # espectro_id -> png em escala linear
+        self._pedidos = {}          # espectro_id -> (Future, rótulo, args)
+        self._conferir_job = None
         self._lote_job = None
         self._resize_job = None
         self._largura = 0
@@ -398,6 +436,26 @@ class AbaDoBanco(ttk.Frame):
         self.status = ttk.Label(linha3, text="", style=app.estilo("FracoFundo.TLabel"))
         self.status.pack(side="right")
 
+        # a seleção pelas caixinhas dos azulejos
+        ttk.Label(linha3, text="Seleção:",
+                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
+        dica(ttk.Button(linha3, text="Selecionar todas", style=app.estilo("Neutro.TButton"),
+                        command=self.selecionar_todas),
+             "Marca a caixinha de todas as amostras que estão na página "
+             "(com uma busca ativa, só as que ela mostra)."
+             ).pack(side="left")
+        dica(ttk.Button(linha3, text="Limpar seleção", style=app.estilo("Neutro.TButton"),
+                        command=self.limpar_selecao),
+             "Desmarca todas as caixinhas."
+             ).pack(side="left", padx=(4, 0))
+        self.excluir_btn = dica(
+            ttk.Button(linha3, text="Excluir selecionadas", style=app.estilo("Perigo.TButton"),
+                       command=self.excluir_selecionadas),
+            "Apaga do banco as amostras marcadas, com as informações, medições "
+            "e espectros delas. Pergunta antes; não tem desfazer.")
+        self.excluir_btn.pack(side="left", padx=(4, 0))
+        self._atualizar_selecao()
+
     def _montar_pagina(self):
         app = self.app
         self.pagina = ttk.Frame(self, style=app.estilo("TFrame"))
@@ -484,6 +542,9 @@ class AbaDoBanco(ttk.Frame):
         self._realcar(None)
         for amostra_id in [i for i in self._por_id if i not in vivos]:
             self._por_id.pop(amostra_id).destruir()
+        if self.selecionadas - vivos:
+            self.selecionadas &= vivos
+            self._atualizar_selecao()
         self.azulejos, self._pendentes = [], []
         for resumo in todos:
             azulejo = self._por_id.get(resumo["id"])
@@ -517,6 +578,7 @@ class AbaDoBanco(ttk.Frame):
             azulejo = Azulejo(self, resumo, valores)
             self._por_id[resumo["id"]] = azulejo
             azulejo.mostrar(resumo["id"] in self._visiveis)
+            azulejo.selecionar(resumo["id"] in self.selecionadas)
         del self._pendentes[:AZULEJOS_POR_LOTE]
         self._ordenar()
         self._dispor()
@@ -592,8 +654,65 @@ class AbaDoBanco(ttk.Frame):
 
     def _on_click(self, evento):
         azulejo = self._azulejo_em(evento)
-        if azulejo is not None:
+        if azulejo is None:
+            return
+        if azulejo.na_caixa(self.canvas.canvasx(evento.x), self.canvas.canvasy(evento.y)):
+            self._alternar_selecao(azulejo)
+        else:
             self.abrir_amostra(azulejo.amostra_id)
+
+    # ---------- a seleção ----------
+
+    def _alternar_selecao(self, azulejo):
+        if azulejo.amostra_id in self.selecionadas:
+            self.selecionadas.discard(azulejo.amostra_id)
+            azulejo.selecionar(False)
+        else:
+            self.selecionadas.add(azulejo.amostra_id)
+            azulejo.selecionar(True)
+        self._atualizar_selecao()
+
+    def selecionar_todas(self):
+        # pelos ids, e não pelos azulejos: os que ainda estão nascendo
+        # em lote entram também
+        self.selecionadas |= self._visiveis
+        for azulejo in self.azulejos:
+            azulejo.selecionar(True)
+        self._atualizar_selecao()
+
+    def limpar_selecao(self):
+        self.selecionadas.clear()
+        for azulejo in self._por_id.values():
+            azulejo.selecionar(False)
+        self._atualizar_selecao()
+
+    def _atualizar_selecao(self):
+        quantas = len(self.selecionadas)
+        self.excluir_btn.config(text="Excluir selecionadas (%d)" % quantas if quantas
+                                else "Excluir selecionadas")
+        self.excluir_btn.state(["!disabled"] if quantas else ["disabled"])
+
+    def excluir_selecionadas(self):
+        ids = sorted(self.selecionadas)
+        if not ids:
+            return
+        nomes = [self._por_id[i].chave[0] for i in ids if i in self._por_id]
+        exemplo = ", ".join(nomes[:6]) + (", …" if len(nomes) > 6 else "")
+        if not messagebox.askyesno(
+                "Excluir amostras",
+                "Excluir %d amostra(s) do banco — %s — com as informações, "
+                "medições e espectros delas?\n\nIsso não tem desfazer." % (len(ids), exemplo),
+                icon=messagebox.WARNING, default=messagebox.NO):
+            return
+        try:
+            with self.banco.transacao():
+                for amostra_id in ids:
+                    self.banco.excluir_amostra(amostra_id)
+        except ErroDoBanco as erro:
+            messagebox.showerror("Banco de amostras", str(erro))
+        self.selecionadas.clear()
+        self._atualizar_selecao()
+        self.recarregar()
 
     def _on_configure(self, evento):
         if abs(evento.width - self._largura) <= 4:
@@ -640,6 +759,7 @@ class AbaDoBanco(ttk.Frame):
             filho.destroy()
         self._imagens = []
         self._fotos_tk = []
+        self._pedidos = {}   # o que a oficina ainda desenhar cai no vazio
 
     def _largura_do_detalhe(self):
         largura = self.canvas_detalhe.winfo_width()
@@ -695,6 +815,15 @@ class AbaDoBanco(ttk.Frame):
              "Troca o nome da amostra. É por ele que o mapeamento e a lista "
              "de amostras a encontram."
              ).pack(side="right", padx=6)
+        dica(ttk.Button(topo, style=app.estilo("Neutro.TButton"), command=self.alternar_escala,
+                        text="Espectros em escala %s" % ("log" if self.escala == LOG
+                                                          else "linear")),
+             "Alterna a escala do eixo de contagens dos espectros desta amostra: "
+             "log (os picos pequenos aparecem ao lado dos grandes) ou linear "
+             "(as alturas ficam proporcionais). Vale para todas as amostras "
+             "deste banco."
+             ).pack(side="right", padx=(0, 12))
+        self._nome_aberto = amostra["nome"]
 
         # as informações: uma caixa por categoria
         corpo = self._secao("Informações", [
@@ -822,11 +951,13 @@ class AbaDoBanco(ttk.Frame):
                 "%.2f%%" % pct if pct >= 0.005 else "<0.01%", l["grupo"]))
         tabela.pack(fill="x", pady=(8, 0))
         if espectro is not None:
-            self._montar_espectro(quadro, espectro)
+            self._montar_espectro(quadro, espectro, medicao)
 
-    def _montar_espectro(self, pai, espectro):
+    def _montar_espectro(self, pai, espectro, medicao=None):
         """O espectro bruto (.mca) de uma medida: o desenho guardado e
-        uma linha com o que o cabeçalho do arquivo diz."""
+        uma linha com o que o cabeçalho do arquivo diz. Em escala log o
+        desenho é o do banco; em linear, é feito na hora (na oficina) e
+        guardado na memória pra próxima vez."""
         app = self.app
         quadro = ttk.Frame(pai, style=app.estilo("Painel.TFrame"))
         quadro.pack(fill="x", pady=(10, 0))
@@ -853,12 +984,74 @@ class AbaDoBanco(ttk.Frame):
             dica(ttk.Button(cabecalho, text="Salvar espectro (PNG)",
                             style=app.estilo("Cartao.TButton"),
                             command=lambda: self.salvar_espectro(eid)),
-                 "Salva num .png o desenho do espectro."
+                 "Salva num .png o desenho do espectro (em escala log)."
                  ).pack(side="right", padx=6)
+        if self.escala == LOG and espectro["tem_imagem"]:
             self._mostrar_imagem(quadro, self.banco.imagem_do_espectro(eid))
+        elif eid in self._cache_linear:
+            self._mostrar_imagem(quadro, self._cache_linear[eid])
         else:
-            ttk.Label(quadro, text="(este espectro está sem desenho)",
-                      style=app.estilo("Fraco.TLabel")).pack(anchor="w", pady=(6, 0))
+            rotulo = ttk.Label(quadro, text="Desenhando o espectro em escala %s\u2026"
+                               % ("linear" if self.escala == LINEAR else "log"),
+                               style=app.estilo("Fraco.TLabel"))
+            rotulo.pack(anchor="w", pady=(8, 0))
+            self._pedir_espectro(espectro, medicao, rotulo)
+
+    # ---------- o espectro desenhado na hora ----------
+
+    def alternar_escala(self):
+        self.escala = LINEAR if self.escala == LOG else LOG
+        self._reabrir()
+
+    def _pedir_espectro(self, espectro, medicao, rotulo):
+        """Manda a oficina desenhar o espectro na escala de agora; o
+        rótulo recebe a imagem quando ela chega (ver `_conferir`)."""
+        eid = espectro["id"]
+        contagens = desempacotar_contagens(self.banco.contagens_do_espectro(eid))
+        energias, calibrado = energias_por_canal(espectro["calibracao"], len(contagens))
+        marcas = self.banco.marcas(medicao["id"]) if medicao is not None else []
+        titulo = "%s \u2014 tubo %s \u2014 %s" % (self._nome_aberto, espectro["simbolo"],
+                                                  espectro["codigo"])
+        args = (contagens.tolist(), energias.tolist(), titulo, marcas, calibrado,
+                espectro["tempo_vivo"], self.escala)
+        futuro = self.app.oficina.pedir_espectro(*args)
+        if futuro is None:
+            # sem oficina: desenha aqui mesmo (uns 200 ms)
+            self._entregar_espectro(eid, rotulo, png_do_espectro(*args))
+            return
+        self._pedidos[eid] = (futuro, rotulo, args)
+        if self._conferir_job is None:
+            self._conferir_job = self.after(ESPERA_DA_OFICINA_MS, self._conferir)
+
+    def _conferir(self):
+        self._conferir_job = None
+        for eid, (futuro, rotulo, args) in list(self._pedidos.items()):
+            if not futuro.done():
+                continue
+            del self._pedidos[eid]
+            try:
+                png = futuro.result()
+            except Exception:
+                self.app.oficina.disponivel = False
+                png = png_do_espectro(*args)
+            self._entregar_espectro(eid, rotulo, png)
+        if self._pedidos:
+            self._conferir_job = self.after(ESPERA_DA_OFICINA_MS, self._conferir)
+
+    def _entregar_espectro(self, eid, rotulo, png):
+        if self.escala == LINEAR:
+            self._cache_linear[eid] = png
+            while len(self._cache_linear) > CACHE_DE_ESPECTROS:
+                del self._cache_linear[next(iter(self._cache_linear))]
+        try:
+            if not rotulo.winfo_exists():
+                return  # a pessoa já foi pra outra amostra
+        except tk.TclError:
+            return
+        rotulo.configure(text="")
+        self._imagens.append((rotulo, png, None))
+        self._pintar_imagem(rotulo, png, None)
+        self._ajustar_rolagem_do_detalhe()
 
     def _mostrar_imagem(self, pai, dados, largura_max=None):
         """Põe a imagem na tela. Sem `largura_max`, ela acompanha a

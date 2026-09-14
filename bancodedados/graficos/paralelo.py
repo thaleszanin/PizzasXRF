@@ -105,10 +105,11 @@ class OficinaDeGraficos:
         """Idem, mas os pixels da figura da tela (pra imagem compilada)."""
         return self._pedir(_pixels, (kept, major, trace, total, nome, tipo))
 
-    def pedir_espectro(self, contagens, energias, titulo, marcas, calibrado, tempo_vivo):
+    def pedir_espectro(self, contagens, energias, titulo, marcas, calibrado, tempo_vivo,
+                       escala="log"):
         """Idem, mas o desenho de um espectro (.mca)."""
         return self._pedir(_espectro, (contagens, energias, titulo, marcas,
-                                       calibrado, tempo_vivo))
+                                       calibrado, tempo_vivo, escala))
 
     def _pedir(self, funcao, args):
         pool = self._obter()
