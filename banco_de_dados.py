@@ -142,6 +142,13 @@ sai pizza. Os nomes aceitos estão em `bancodedados.graficos.TIPOS`:
 """
 
 if __name__ == "__main__":
+    # Num programa empacotado (PyInstaller), cada processo da oficina
+    # de gráficos nasce reexecutando este arquivo; esta linha é o que
+    # faz o filho fazer só a parte dele em vez de abrir outra janela.
+    # Rodando pelo Python normal ela não faz nada.
+    from multiprocessing import freeze_support
+    freeze_support()
+
     # A importação fica aqui dentro de propósito: os processos da
     # oficina de gráficos (bancodedados/graficos/paralelo.py) importam
     # este arquivo ao nascer, e não precisam da janela nem do Tkinter —
