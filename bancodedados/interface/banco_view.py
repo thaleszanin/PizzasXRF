@@ -1201,9 +1201,16 @@ class AbaDoBanco(ttk.Frame):
             messagebox.showerror("Banco de amostras", str(erro))
 
     def _reabrir(self):
-        """Refaz a tela da amostra aberta (depois de algo mudar nela)."""
-        if self.amostra_aberta is not None:
-            self.abrir_amostra(self.amostra_aberta)
+        """Refaz a tela da amostra aberta (depois de algo mudar nela),
+        sem perder o ponto em que ela estava rolada."""
+        if self.amostra_aberta is None:
+            return
+        posicao = self.canvas_detalhe.yview()[0]
+        self.abrir_amostra(self.amostra_aberta)
+        # o miolo novo precisa ter sido medido pra rolagem valer
+        self.update_idletasks()
+        self._ajustar_rolagem_do_detalhe()
+        self.canvas_detalhe.yview_moveto(posicao)
 
     def recarregar_tudo(self):
         """A página e, se houver, a amostra aberta."""

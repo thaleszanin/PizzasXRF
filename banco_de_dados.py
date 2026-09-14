@@ -141,9 +141,12 @@ sai pizza. Os nomes aceitos estão em `bancodedados.graficos.TIPOS`:
         fig.savefig("saida - %s.png" % nome)
 """
 
-from bancodedados.interface import App
-
-
 if __name__ == "__main__":
+    # A importação fica aqui dentro de propósito: os processos da
+    # oficina de gráficos (bancodedados/graficos/paralelo.py) importam
+    # este arquivo ao nascer, e não precisam da janela nem do Tkinter —
+    # só do que desenha.
+    from bancodedados.interface import App
+
     app = App()
     app.mainloop()

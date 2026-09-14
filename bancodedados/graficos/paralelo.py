@@ -30,6 +30,7 @@ faz.
 """
 
 import os
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
@@ -74,19 +75,34 @@ class OficinaDeGraficos:
     def __init__(self, processos=None):
         self.processos = processos or quantos_processos()
         self._pool = None
+        self._tranca = threading.Lock()
+        self._aquecida = False
         self.disponivel = True   # vira False se os processos não subirem
 
     def _obter(self):
-        if self._pool is None and self.disponivel:
-            try:
-                self._pool = ProcessPoolExecutor(max_workers=self.processos)
-            except (OSError, ValueError, RuntimeError):
-                self.disponivel = False
-        return self._pool
+        with self._tranca:
+            if self._pool is None and self.disponivel:
+                try:
+                    self._pool = ProcessPoolExecutor(max_workers=self.processos)
+                except (OSError, ValueError, RuntimeError):
+                    self.disponivel = False
+            return self._pool
 
     def aquecer(self):
-        """Faz os processos nascerem e importarem o matplotlib agora, em
-        segundo plano, pra estarem prontos quando a batelada vier."""
+        """Faz os processos nascerem e importarem o matplotlib agora, pra
+        estarem prontos quando a batelada vier.
+
+        Numa thread, e não aqui: o `submit` que faz um processo nascer
+        é uma chamada de sistema de uns 15 ms, e oito delas seguidas
+        na thread da janela eram um engasgo de 140 ms bem na hora em
+        que os cartões estão sendo desenhados.
+        """
+        if self._aquecida or not self.disponivel:
+            return
+        self._aquecida = True
+        threading.Thread(target=self._aquecer, daemon=True).start()
+
+    def _aquecer(self):
         pool = self._obter()
         if pool is None:
             return
@@ -128,6 +144,7 @@ class OficinaDeGraficos:
         self.fechar()
 
     def fechar(self):
-        if self._pool is not None:
-            self._pool.shutdown(wait=False, cancel_futures=True)
-            self._pool = None
+        with self._tranca:
+            pool, self._pool = self._pool, None
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)

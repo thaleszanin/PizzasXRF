@@ -1348,18 +1348,43 @@ class App(tk.Tk):
         for botao in self.export_buttons:
             botao.state(["!disabled"])
 
-    def _encomendar(self, amostras, png=True):
-        """Manda os gráficos da batelada inteira pra oficina de uma vez,
-        pra todos os processos trabalharem desde já. Devolve um Future
-        por amostra — ou None no lugar de quem a oficina não aceitou,
-        e aí `_imagem_da_amostra` desenha aqui mesmo."""
+    def _encomendar(self, amostras, png=True, espectros=None):
+        """Manda os gráficos da batelada inteira pra oficina, pra todos
+        os processos trabalharem desde já — mas UM pedido por pedaço
+        do gerador: despachar 76 de uma vez (classificar, ler o .mca,
+        empacotar, serializar) segurava a janela por 0,7 s. Devolve
+        um Future por amostra — ou None no lugar de quem a oficina não
+        aceitou, e aí `_imagem_da_amostra` desenha aqui mesmo.
+
+        Com `espectros` (uma lista), o .mca ao lado de cada .txt é
+        lido e encomendado junto: entra (dados, args, Future) ou None."""
         futuros = []
         for sample in amostras:
-            kept, _, major, trace, total = self._dados_da_amostra(sample)
+            kept, removed, major, trace, total = self._dados_da_amostra(sample)
             pedir = self.oficina.pedir_png if png else self.oficina.pedir_pixels
             futuros.append(pedir(kept, major, trace, total,
                                  self.display_name_for(sample), self.tipo))
+            if espectros is not None:
+                espectros.append(self._encomendar_mca(sample, kept))
+            yield
         return futuros
+
+    def _encomendar_mca(self, sample, kept):
+        """O .mca de mesmo nome que o .txt, lido e encomendado. None se
+        não há; a razão vai pra `sample["erro_do_espectro"]` se não
+        deu pra ler."""
+        caminho = self._mca_ao_lado(sample)
+        if caminho is None:
+            return None
+        try:
+            dados = parse_mca_file(caminho)
+        except (ValueError, OSError) as erro:
+            sample["erro_do_espectro"] = str(erro)
+            return None
+        marcas = [(e["energia"], e["symbol"]) for e in kept if e.get("energia")]
+        titulo = "%s \u2014 tubo %s \u2014 %s" % (
+            self.display_name_for(sample), simbolo_do_tubo(self.tube_var.get()), sample["code"])
+        return (dados,) + self._encomendar_espectro(dados, titulo, marcas)
 
     def _imagem_da_amostra(self, sample, nome, futuro, png=True):
         """O gráfico de uma amostra — os bytes do png ou os pixels da
@@ -1435,7 +1460,7 @@ class App(tk.Tk):
     def _lote_de_exportacao(self, pasta, amostras, compilado):
         blocos, arquivos, usados = [], [], set()
         pilha = PilhaDeImagens() if compilado else None
-        futuros = self._encomendar(amostras, png=not compilado)
+        futuros = yield from self._encomendar(amostras, png=not compilado)
         for indice, sample in enumerate(amostras):
             nome = self.display_name_for(sample)
             try:
@@ -1678,28 +1703,15 @@ class App(tk.Tk):
         medição — desenhado na oficina junto com os gráficos."""
         banco = aba.banco
         novas, atualizadas, espectros, erros, ids = 0, 0, 0, [], set()
-        futuros = self._encomendar(amostras)
         tubo = self.tube_var.get()
-        simbolo = simbolo_do_tubo(tubo)
         # os espectros vão pra oficina JUNTO com os gráficos, pra fila
-        # dela nunca ficar vazia; lê-los custa milissegundos
+        # dela nunca ficar vazia
         pedidos = []
+        futuros = yield from self._encomendar(amostras, espectros=pedidos)
         for sample in amostras:
-            caminho = self._mca_ao_lado(sample)
-            if caminho is None:
-                pedidos.append(None)
-                continue
-            try:
-                dados = parse_mca_file(caminho)
-            except (ValueError, OSError) as erro:
+            erro = sample.pop("erro_do_espectro", None)
+            if erro:
                 erros.append("%s (espectro): %s" % (sample["code"], erro))
-                pedidos.append(None)
-                continue
-            kept, _ = apply_exclusions(sample["elements"], self.tube_z)
-            marcas = [(e["energia"], e["symbol"]) for e in kept if e.get("energia")]
-            titulo = "%s \u2014 tubo %s \u2014 %s" % (self.display_name_for(sample),
-                                                      simbolo, sample["code"])
-            pedidos.append((dados,) + self._encomendar_espectro(dados, titulo, marcas))
 
         for indice, sample in enumerate(amostras):
             nome = self.display_name_for(sample)
@@ -1720,6 +1732,7 @@ class App(tk.Tk):
                 else:
                     atualizadas += 1
                 if pedidos[indice] is not None:
+                    yield   # a medição já está gravada: o espectro é outro pedaço
                     dados, args, futuro = pedidos[indice]
                     png = yield from self._png_do_espectro(args, futuro)
                     self._guardar_espectro(banco, amostra_id, sample["code"], tubo, dados, png)
@@ -1766,6 +1779,7 @@ class App(tk.Tk):
         novos, atualizados, sem_nome, erros = 0, 0, [], []
         pedidos = []
         for caminho in caminhos:
+            yield   # um arquivo por pedaço (ver `_encomendar`)
             codigo = os.path.splitext(os.path.basename(caminho))[0]
             nome = self.name_mapping.get(codigo.lower())
             if not nome:
