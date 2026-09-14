@@ -1,7 +1,7 @@
 """A janela do programa (Tkinter): botões, slider, cards e tabelas.
 
-Toda a lógica de dados vive em `catalogador.nucleo` e todo o desenho em
-`catalogador.graficos`. Esta camada só amarra as duas coisas na tela.
+Toda a lógica de dados vive em `bancodedados.nucleo` e todo o desenho em
+`bancodedados.graficos`. Esta camada só amarra as duas coisas na tela.
 
 As CORES não estão aqui: ficam em `interface/tema.py`, que tem o modo
 escuro e o claro. Aqui os widgets só dizem de que estilo são
@@ -42,7 +42,7 @@ esse trabalho o mínimo possível:
     minimizar tudo deixa uma batelada grande leve de rolar.
 
 O conteúdo dos arquivos que os botões de salvar geram não está aqui, e
-sim em `catalogador/exportacao.py` — esta camada só escolhe o destino e
+sim em `bancodedados/exportacao.py` — esta camada só escolhe o destino e
 cuida da fila, um arquivo por vez, pra janela não congelar.
 """
 
@@ -335,7 +335,7 @@ class SampleCard:
             self.app.definir_altura(self, nova)
 
     def _fill_table(self, major, trace, total):
-        # as MESMAS linhas que vão pro arquivo .txt (catalogador/exportacao.py),
+        # as MESMAS linhas que vão pro arquivo .txt (bancodedados/exportacao.py),
         # pra tela e arquivo nunca discordarem
         linhas = linhas_da_tabela(major, trace, total, self.app.fonte["formatar"])
 

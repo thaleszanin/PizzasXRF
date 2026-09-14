@@ -13,19 +13,19 @@ diferentes.
 | Programa | O que é |
 | --- | --- |
 | `pre_analise_xrf.py` | A **pré-análise**: roda antes do catalogador e diz quais elementos saíram com erro alto demais e precisam ser tirados antes de refazer a análise. |
-| `catalogador_xrf.py` / `generico/catalogador_xrf.py` | O **catalogador** de espectros, nas duas versões descritas abaixo. |
+| `catalogador_xrf.py` / `banco_de_dados.py` | O **catalogador** de espectros, nas duas versões descritas abaixo. |
 | `corretor_ag_au_rh.py` | O **corretor**, que reconcilia uma batelada medida em até 3 tubos. |
 
 ## As duas versões do catalogador
 
 | Onde | O que é |
 | --- | --- |
-| `catalogador_xrf.py` (raiz) | A versão que ganha o **banco central de amostras**: pastas e subpastas editáveis por commodity (madeira, carne, soja, …). **No momento ela é uma cópia exata da genérica** — foi zerada nessa base para receber o banco de novo, já em cima dos tipos de gráfico, do tema escuro e das concentrações. O banco antigo está no histórico, no commit `89b0188`. |
-| `generico/catalogador_xrf.py` | O catalogador **genérico**: faz a distinção majoritário/traço de qualquer tipo de amostra, sem pastas e sem commodity. Nasceu como cópia de antes do banco e é onde os **tipos de gráfico** foram adicionados (pizza, rosca, barras, barra empilhada e Pareto). |
+| `catalogador_xrf.py` | O catalogador **genérico** (pacote `catalogador/`): faz a distinção majoritário/traço de qualquer tipo de amostra, sem pastas e sem commodity. É onde os **tipos de gráfico** foram adicionados (pizza, rosca, barras, barra empilhada e Pareto). |
+| `banco_de_dados.py` | A versão (pacote `bancodedados/`) que ganha o **banco central de amostras**: pastas e subpastas editáveis por commodity (madeira, carne, soja, …). **No momento ela é uma cópia exata da genérica** — foi zerada nessa base para receber o banco de novo, já em cima dos tipos de gráfico, do tema escuro e das concentrações. O banco antigo está no histórico, no commit `89b0188`. |
 
 As duas são independentes: rodam ao mesmo tempo e não compartilham
 código — hoje o código das duas é o mesmo, e volta a divergir quando o
-banco for reconstruído na da raiz. Detalhes da versão genérica em [`generico/LEIA-ME.txt`](generico/LEIA-ME.txt).
+banco for reconstruído no `banco_de_dados.py`. Detalhes da versão genérica em [`LEIA-ME.txt`](LEIA-ME.txt).
 
 ## Áreas ou concentrações (versão genérica)
 
@@ -78,6 +78,12 @@ pip install matplotlib
 python catalogador_xrf.py
 ```
 
+Para a versão com banco de amostras:
+
+```
+python banco_de_dados.py
+```
+
 (A pré-análise é um programa à parte — veja a seção dela mais abaixo.)
 
 Para calcular pelas concentrações (só na versão genérica), também
@@ -104,8 +110,7 @@ batelada com medidas de tubos diferentes descarta o elemento certo em
 cada uma.
 
 Tudo mora num arquivo só — `amostras.db`, na pasta "Catalogador FRX" do
-seu perfil de usuário (a pasta e o programa da raiz ainda usam o nome
-antigo, FRX; só a versão genérica foi renomeada para XRF). Backup é copiar esse arquivo; para o banco ser do
+seu perfil de usuário. Backup é copiar esse arquivo; para o banco ser do
 laboratório inteiro, aponte o programa para um arquivo numa pasta de rede
 em "Abrir outro…".
 

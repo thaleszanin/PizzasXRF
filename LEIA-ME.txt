@@ -1,9 +1,10 @@
 CATALOGADOR XRF — VERSÃO GENÉRICA (cópia congelada)
 ====================================================
 
-Esta pasta é uma cópia EXATA do catalogador como ele estava em
-02/09/2026, antes de o banco de dados central de amostras entrar na
-versão principal (a que fica na raiz do repositório).
+Este é o catalogador GENÉRICO. Nasceu como cópia EXATA do catalogador
+como ele estava em 02/09/2026, antes de o banco de dados central de
+amostras entrar na outra versão (`banco_de_dados.py`).
+Hoje ele mora na raiz do repositório, junto com os outros programas.
 
 Para que ela serve
 ------------------
@@ -13,17 +14,17 @@ sem pastas e sem banco de dados. Carrega os .txt, classifica, desenha e
 salva — e nada mais. É a ferramenta certa quando a amostra não é madeira,
 carne ou soja e você só quer a distinção major/traço na hora.
 
-A versão da raiz (`E:\codigosthales\catalogador_xrf.py`) é a que ganhou o
-banco de amostras com pastas e subpastas editáveis por commodity.
+A outra versão (`banco_de_dados.py`, com o pacote `bancodedados/`) é a
+que ganha o banco de amostras com pastas e subpastas editáveis por
+commodity.
 
 Como rodar
 ----------
-    python generico/catalogador_xrf.py
+    python catalogador_xrf.py
 
-Os arquivos aqui dentro são independentes dos da raiz: rodando pelo
-caminho acima, o Python põe a pasta `generico/` na frente do caminho de
-busca, então `import catalogador` acha o pacote DESTA pasta, e não o da
-raiz. Dá para mexer numa versão sem afetar a outra.
+As duas versões são independentes: esta usa o pacote `catalogador/`
+e a do banco usa o pacote `bancodedados/`, os dois lado a lado na raiz.
+Dá para mexer numa versão sem afetar a outra.
 
 O que já mudou desde a cópia
 ----------------------------
@@ -31,10 +32,7 @@ O que já mudou desde a cópia
   (parse_xrf_file) e no arquivo de entrada, que agora é
   catalogador_xrf.py. Rode com:
 
-      python generico/catalogador_xrf.py
-
-  A versão da raiz (a do banco de amostras) ainda usa o nome antigo;
-  ela não foi mexida.
+      python catalogador_xrf.py
 
 * Rolagem rápida em lista grande. Cada cartão virou um item do canvas,
   com a posição calculada pelo próprio programa. Antes todos moravam
@@ -97,7 +95,7 @@ O que já mudou desde a cópia
 
 O que NÃO trazer para cá
 ------------------------
-Esta cópia é o ponto de retorno. Se ela precisar evoluir (por exemplo,
+Esta versão é o ponto de retorno. Se ela precisar evoluir (por exemplo,
 para atender a novos tipos de amostra genérica), mexa à vontade — mas as
 mudanças da versão com banco de dados não devem ser trazidas para cá,
 senão as duas viram a mesma coisa e o backup deixa de existir.

@@ -9,8 +9,8 @@ script, sem abrir janela nenhuma:
 
     import matplotlib
     matplotlib.use("Agg")
-    from catalogador.nucleo import parse_xrf_file, apply_exclusions, classify
-    from catalogador.exportacao import bloco_da_amostra, linhas_da_tabela
+    from bancodedados.nucleo import parse_xrf_file, apply_exclusions, classify
+    from bancodedados.exportacao import bloco_da_amostra, linhas_da_tabela
 
     elementos = parse_xrf_file("amostra.txt")
     mantidos, fora = apply_exclusions(elementos, tube_z={78, 79})

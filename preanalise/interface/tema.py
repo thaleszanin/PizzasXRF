@@ -2,7 +2,7 @@
 """As cores da janela, nos dois modos: escuro e claro.
 
 Esta é a mesma camada de aparência do catalogador genérico
-(`generico/catalogador/interface/tema.py`), copiada para cá com os
+(`catalogador/interface/tema.py`), copiada para cá com os
 papéis a mais que a pré-análise usa — o vermelho do erro alto, o verde
 do "ok" e o texto do log. Ela é copiada, e não importada, porque os
 programas deste repositório rodam soltos, cada um com o seu pacote.

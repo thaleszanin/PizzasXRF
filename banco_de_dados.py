@@ -38,14 +38,14 @@ Como rodar:
      se der erro, instale com: sudo apt install python3-tk)
      Para calcular por concentrações, também:  pip install openpyxl
      — só pra isso; quem só usa os .txt do XRF não precisa dela.
-  3. Rode:  python catalogador_xrf.py
+  3. Rode:  python banco_de_dados.py
 
 Onde está cada coisa
 --------------------
 Este arquivo é só a porta de entrada. O código de verdade está no
-pacote `catalogador/`, dividido por seção:
+pacote `bancodedados/`, dividido por seção:
 
-  catalogador/
+  bancodedados/
     nucleo/        <- os DADOS (nenhuma interface, nenhum gráfico)
       tabela_periodica.py   Z -> símbolo ("26" vira "Fe")
       leitura.py            parse_xrf_file, parse_mapping
@@ -75,8 +75,8 @@ Para gerar imagens num script, sem abrir janela nenhuma:
 
     import matplotlib
     matplotlib.use("Agg")
-    from catalogador.nucleo import parse_xrf_file, apply_exclusions, classify
-    from catalogador.graficos import build_sample_figure
+    from bancodedados.nucleo import parse_xrf_file, apply_exclusions, classify
+    from bancodedados.graficos import build_sample_figure
 
     elementos = parse_xrf_file("amostra.txt")
     mantidos, _ = apply_exclusions(elementos, tube_z={78, 79})
@@ -87,22 +87,22 @@ Para gerar imagens num script, sem abrir janela nenhuma:
 Trocando só a primeira linha, o mesmo script trabalha por concentrações
 — o resto não muda, porque as duas leituras devolvem a mesma coisa:
 
-    from catalogador.nucleo import parse_planilha
+    from bancodedados.nucleo import parse_planilha
 
     amostras, unidade, _ = parse_planilha("amostras.xlsx")
     elementos = amostras[0]["elements"]
 
 O último argumento do `build_sample_figure` é o tipo de gráfico; sem ele
-sai pizza. Os nomes aceitos estão em `catalogador.graficos.TIPOS`:
+sai pizza. Os nomes aceitos estão em `bancodedados.graficos.TIPOS`:
 
-    from catalogador.graficos import TIPOS, build_sample_figure
+    from bancodedados.graficos import TIPOS, build_sample_figure
 
     for nome in TIPOS:          # "Pizza", "Rosca", "Barras", ...
         fig = build_sample_figure(mantidos, maj, tracos, total, "Amostra", nome)
         fig.savefig("saida - %s.png" % nome)
 """
 
-from catalogador.interface import App
+from bancodedados.interface import App
 
 
 if __name__ == "__main__":
