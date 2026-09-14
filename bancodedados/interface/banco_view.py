@@ -314,6 +314,7 @@ class AbaDoBanco(ttk.Frame):
         self._pendentes = []        # (resumo, informações) ainda sem azulejo
         self._visiveis = set()      # os ids que a busca deixa na página
         self.selecionadas = set()   # os ids marcados na caixinha
+        self._ancora = None         # a última marcada com clique (pro Shift)
         self.escala = LOG           # como os espectros aparecem na amostra
         self._cache_linear = {}     # espectro_id -> png em escala linear
         self._pedidos = {}          # espectro_id -> (Future, rótulo, args)
@@ -442,7 +443,9 @@ class AbaDoBanco(ttk.Frame):
         dica(ttk.Button(linha3, text="Selecionar todas", style=app.estilo("Neutro.TButton"),
                         command=self.selecionar_todas),
              "Marca a caixinha de todas as amostras que estão na página "
-             "(com uma busca ativa, só as que ela mostra)."
+             "(com uma busca ativa, só as que ela mostra). Nos azulejos: clique "
+             "na caixinha ou Ctrl+clique marca uma; Shift+clique marca da última "
+             "marcada até ela."
              ).pack(side="left")
         dica(ttk.Button(linha3, text="Limpar seleção", style=app.estilo("Neutro.TButton"),
                         command=self.limpar_selecao),
@@ -653,10 +656,21 @@ class AbaDoBanco(ttk.Frame):
         self._realcar(self._azulejo_em(evento))
 
     def _on_click(self, evento):
+        """Clique no azulejo:
+
+          * na caixinha, ou com Ctrl: marca/desmarca a amostra;
+          * com Shift: marca todas entre a última marcada e esta
+            (na ordem da página), como numa lista de arquivos;
+          * no resto, sem tecla: abre a amostra.
+        """
         azulejo = self._azulejo_em(evento)
         if azulejo is None:
             return
-        if azulejo.na_caixa(self.canvas.canvasx(evento.x), self.canvas.canvasy(evento.y)):
+        shift, ctrl = evento.state & 0x0001, evento.state & 0x0004
+        if shift:
+            self._selecionar_intervalo(azulejo)
+        elif ctrl or azulejo.na_caixa(self.canvas.canvasx(evento.x),
+                                      self.canvas.canvasy(evento.y)):
             self._alternar_selecao(azulejo)
         else:
             self.abrir_amostra(azulejo.amostra_id)
@@ -664,13 +678,34 @@ class AbaDoBanco(ttk.Frame):
     # ---------- a seleção ----------
 
     def _alternar_selecao(self, azulejo):
-        if azulejo.amostra_id in self.selecionadas:
-            self.selecionadas.discard(azulejo.amostra_id)
-            azulejo.selecionar(False)
-        else:
-            self.selecionadas.add(azulejo.amostra_id)
-            azulejo.selecionar(True)
+        marcar = azulejo.amostra_id not in self.selecionadas
+        self._marcar(azulejo, marcar)
+        self._ancora = azulejo.amostra_id if marcar else None
         self._atualizar_selecao()
+
+    def _selecionar_intervalo(self, azulejo):
+        """Shift+clique: marca da âncora (a última amostra marcada com
+        um clique) até esta, na ordem da página. Sem âncora, marca só
+        esta e ela vira a âncora."""
+        posicao = {a.amostra_id: i for i, a in enumerate(self.azulejos)}
+        fim = posicao.get(azulejo.amostra_id)
+        inicio = posicao.get(self._ancora)
+        if fim is None:
+            return
+        if inicio is None:
+            self._marcar(azulejo, True)
+            self._ancora = azulejo.amostra_id
+        else:
+            for outro in self.azulejos[min(inicio, fim):max(inicio, fim) + 1]:
+                self._marcar(outro, True)
+        self._atualizar_selecao()
+
+    def _marcar(self, azulejo, sim):
+        if sim:
+            self.selecionadas.add(azulejo.amostra_id)
+        else:
+            self.selecionadas.discard(azulejo.amostra_id)
+        azulejo.selecionar(sim)
 
     def selecionar_todas(self):
         # pelos ids, e não pelos azulejos: os que ainda estão nascendo
@@ -681,6 +716,7 @@ class AbaDoBanco(ttk.Frame):
         self._atualizar_selecao()
 
     def limpar_selecao(self):
+        self._ancora = None
         self.selecionadas.clear()
         for azulejo in self._por_id.values():
             azulejo.selecionar(False)
@@ -711,6 +747,7 @@ class AbaDoBanco(ttk.Frame):
         except ErroDoBanco as erro:
             messagebox.showerror("Banco de amostras", str(erro))
         self.selecionadas.clear()
+        self._ancora = None
         self._atualizar_selecao()
         self.recarregar()
 
