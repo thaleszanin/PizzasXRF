@@ -47,6 +47,7 @@ Os papéis (o nome do estilo sem o tema na frente):
                                   do cartão
     Chip.TLabel                   a etiqueta do tubo de uma medição
     Dica.TLabel                   o balão de dica que aparece sobre os botões
+    TMenubutton                   o botão que abre um menu (Importar ▾)
 
 Os azulejos da página do banco não passam por estilo: são desenhos no
 canvas, pintados com as cores de `TEMAS` (inclusive "realce", a cor do
@@ -245,6 +246,14 @@ def _estilos_do_tema(root, style, tema):
     style.configure(E("Chip.TLabel"), background=cores["azul"],
                     foreground=cores["botao_texto"], font=(FONTE, 8, "bold"),
                     padding=(6, 1))
+    # o botão que abre um menu (Importar ▾ / Exportar ▾ na aba do banco):
+    # a cara do botão discreto, com a setinha
+    style.configure(E("TMenubutton"), background=cores["neutro"],
+                    foreground=cores["corpo"], arrowcolor=cores["corpo"],
+                    borderwidth=0, relief="flat", padding=(10, 5),
+                    font=(FONTE, 9, "bold"))
+    style.map(E("TMenubutton"),
+              background=[("active", cores["neutro_claro"]), ("pressed", cores["neutro_claro"])])
     # o balão de dica dos botões (interface/dicas.py)
     style.configure(E("Dica.TLabel"), background=cores["neutro"],
                     foreground=cores["texto"])

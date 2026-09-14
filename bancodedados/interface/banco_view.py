@@ -85,6 +85,8 @@ CAIXA = 16
 CACHE_DE_ESPECTROS = 40
 # De quanto em quanto tempo a tela olha se a oficina já desenhou.
 ESPERA_DA_OFICINA_MS = 60
+# Quanto esperar depois da última tecla na busca pra filtrar a página.
+ESPERA_DA_BUSCA_MS = 250
 # A primeira opção de "Ordenar por": o nome da amostra (as outras são as
 # categorias do banco).
 ORDEM_POR_NOME = "Nome da amostra"
@@ -161,7 +163,7 @@ class Azulejo:
     e mover é uma chamada por azulejo, não por item.
     """
 
-    def __init__(self, aba, resumo, informacoes):
+    def __init__(self, aba, resumo, texto):
         self.aba = aba
         self.canvas = aba.canvas
         self.amostra_id = resumo["id"]
@@ -190,15 +192,16 @@ class Azulejo:
         self.marca = c.create_text(0, 0, text="\u2713", anchor="center",
                                    font=self._fontes["chip"], tags=(tag,), state="hidden")
         self.chips = []   # [(retângulo, texto, é_forte)]
-        self.atualizar(resumo, informacoes)
+        self.atualizar(resumo, texto)
         self.pintar()
 
     # ---------- conteúdo ----------
 
-    def atualizar(self, resumo, informacoes):
-        """Põe no azulejo o que o banco diz agora. Sai na hora se nada
-        mudou — é o que faz `recarregar` custar quase nada."""
-        texto = _resumo(informacoes) or "sem informações da lista"
+    def atualizar(self, resumo, texto):
+        """Põe no azulejo o que o banco diz agora (`texto` é a linha
+        embaixo do nome, montada pela aba). Sai na hora se nada mudou —
+        é o que faz `recarregar` custar quase nada."""
+        texto = texto or "sem informações da lista"
         chave = (resumo["nome"], texto, tuple(resumo["tubos"]), resumo["tem_foto"],
                  bool(resumo.get("espectros")))
         if chave == self.chave:
@@ -359,6 +362,7 @@ class AbaDoBanco(ttk.Frame):
 
     def _montar_barra(self):
         app = self.app
+        dica = app.dicas.registrar
         barra = ttk.Frame(self, padding=(12, 10, 12, 0), style=app.estilo("TFrame"))
         barra.pack(fill="x")
 
@@ -368,7 +372,6 @@ class AbaDoBanco(ttk.Frame):
         self.titulo = ttk.Label(linha1, text=self.banco.nome,
                                 style=app.estilo("Secao.TLabel"), font=("Segoe UI", 12, "bold"))
         self.titulo.pack(side="left")
-        dica = app.dicas.registrar
         dica(ttk.Button(linha1, text="Renomear", style=app.estilo("Neutro.TButton"),
                         command=self.renomear),
              "Troca o nome do banco — o título desta aba. Dois cliques na aba "
@@ -383,102 +386,80 @@ class AbaDoBanco(ttk.Frame):
              "gravado — dá para abrir de novo depois."
              ).pack(side="right")
 
-        # linha 2: o que entra e o que sai
+        # linha 2: a ação principal, os menus, a busca e a ordem. As
+        # entradas e saídas ficam em dois menus — eram sete botões
+        # largos numa linha só.
         linha2 = ttk.Frame(barra, style=app.estilo("TFrame"))
         linha2.pack(fill="x", pady=(10, 0))
-        ttk.Label(linha2, text="Entrada:",
-                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(0, 6))
         dica(ttk.Button(linha2, text="Adicionar amostras da tela", style=app.estilo("TButton"),
                         command=lambda: app.adicionar_ao_banco(self)),
              "Guarda aqui as amostras abertas na aba Catalogador: a tabela e o "
-             "gráfico de cada uma, com o tubo e o limite de lá. Precisa do "
-             "mapeamento carregado — é ele que dá o nome da amostra."
-             ).pack(side="left", padx=3)
-        dica(ttk.Button(linha2, text="Importar .txt/.png exportados…",
-                        style=app.estilo("TButton"), command=self.importar_exportados),
-             "Lê de volta os .txt que o programa salvou (o .png de mesmo nome "
-             "entra junto). Também precisa do mapeamento."
-             ).pack(side="left", padx=3)
-        dica(ttk.Button(linha2, text="Importar lista de amostras (.xlsx)…",
-                        style=app.estilo("TButton"), command=self.importar_planilha),
-             "Traz as informações de cada amostra de uma planilha: a primeira "
-             "linha são as categorias e uma das colunas é o nome da amostra. "
-             "Cada coluna vira uma categoria deste banco."
-             ).pack(side="left", padx=3)
-        dica(ttk.Button(linha2, text="Importar espectros (.mca)…",
-                        style=app.estilo("TButton"), command=self.importar_espectros),
-             "Lê os .mca (o espectro bruto do detector) e guarda cada um na "
-             "amostra que o mapeamento indica pelo nome do arquivo — o mesmo "
-             "do .txt. Ao \"Adicionar amostras da tela\", o .mca que estiver "
-             "ao lado do .txt já entra sozinho."
-             ).pack(side="left", padx=3)
-        dica(ttk.Button(linha2, text="Importar outro banco (.db)…",
-                        style=app.estilo("TButton"), command=self.importar_banco),
-             "Junta a este banco tudo o que há em outro arquivo .db: amostras, "
-             "informações, fotos e medições. O que já está preenchido aqui "
-             "não é sobrescrito."
-             ).pack(side="left", padx=3)
-        ttk.Label(linha2, text="Saída:",
-                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
-        dica(ttk.Button(linha2, text="Salvar cópia (.db)…", style=app.estilo("Sucesso.TButton"),
-                        command=self.salvar_copia),
-             "Grava uma cópia deste banco num arquivo .db — para levar, mandar "
-             "ou guardar. O banco aberto já é gravado a cada mudança."
-             ).pack(side="left", padx=3)
-        dica(ttk.Button(linha2, text="Exportar JSON…", style=app.estilo("Sucesso.TButton"),
-                        command=self.exportar_json),
-             "Gera o .json do catálogo (uma entrada por amostra, com as "
-             "categorias e os elementos por tubo) e a pasta \"dados\" com as "
-             "imagens ao lado dele."
-             ).pack(side="left", padx=3)
-
-        # linha 3: procurar, categorias e o resumo
-        linha3 = ttk.Frame(barra, style=app.estilo("TFrame"))
-        linha3.pack(fill="x", pady=(10, 8))
-        ttk.Label(linha3, text="Procurar:",
-                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(0, 6))
-        self.busca_var = tk.StringVar()
-        busca = ttk.Entry(linha3, textvariable=self.busca_var, width=30,
-                          style=app.estilo("TEntry"))
-        busca.pack(side="left")
-        busca.bind("<Return>", lambda _e: self.recarregar())
-        dica(ttk.Button(linha3, text="Buscar", style=app.estilo("Neutro.TButton"),
-                        command=self.recarregar),
-             "Filtra a página pelo texto: nome da amostra, código do arquivo "
-             "ou qualquer informação (espécie, local…). Enter também busca."
-             ).pack(side="left", padx=(6, 0))
-        dica(ttk.Button(linha3, text="Limpar", style=app.estilo("Neutro.TButton"),
-                        command=self.limpar_busca),
-             "Desfaz a busca e mostra todas as amostras."
-             ).pack(side="left", padx=(4, 0))
-        dica(ttk.Button(linha3, text="Categorias…", style=app.estilo("Neutro.TButton"),
+             "gráfico de cada uma, com o tubo e o limite de lá (e o .mca que "
+             "estiver ao lado do .txt). Precisa do mapeamento carregado — é ele "
+             "que dá o nome da amostra."
+             ).pack(side="left")
+        self.menus = []   # os tk.Menu, pra repintar na troca de tema
+        importar = self._menu(linha2, "Importar", [
+            ("Arquivos .txt/.png exportados\u2026", self.importar_exportados),
+            ("Espectros (.mca)\u2026", self.importar_espectros),
+            ("Lista de amostras (.xlsx)\u2026", self.importar_planilha),
+            ("Outro banco (.db)\u2026", self.importar_banco)])
+        dica(importar, "O que mais entra no banco: os .txt/.png que o programa "
+             "exportou, os espectros .mca, a lista de amostras (.xlsx) com as "
+             "categorias, ou outro .db inteiro. Os arquivos de medida precisam "
+             "do mapeamento carregado no Catalogador.")
+        importar.pack(side="left", padx=(6, 0))
+        exportar = self._menu(linha2, "Exportar", [
+            ("Salvar uma cópia do banco (.db)\u2026", self.salvar_copia),
+            ("Gerar o JSON do catálogo\u2026", self.exportar_json)])
+        dica(exportar, "Uma cópia do banco num arquivo .db (o aberto já é gravado "
+             "a cada mudança), ou o .json do catálogo com a pasta de imagens ao lado.")
+        exportar.pack(side="left", padx=(4, 0))
+        dica(ttk.Button(linha2, text="Categorias\u2026", style=app.estilo("Neutro.TButton"),
                         command=self.gerenciar_categorias),
              "Cria, renomeia, reordena e apaga as categorias (as colunas de "
              "informação) deste banco. As duas primeiras aparecem nos azulejos."
-             ).pack(side="left", padx=(18, 0))
-        ttk.Label(linha3, text="Ordenar por:",
+             ).pack(side="left", padx=(4, 0))
+
+        ttk.Label(linha2, text="Procurar:",
+                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
+        self.busca_var = tk.StringVar()
+        busca = ttk.Entry(linha2, textvariable=self.busca_var, width=24,
+                          style=app.estilo("TEntry"))
+        busca.pack(side="left")
+        dica(busca, "Filtra a página enquanto você digita: nome da amostra, código "
+             "do arquivo ou qualquer informação (espécie, local\u2026).")
+        self._busca_job = None
+        busca.bind("<KeyRelease>", self._ao_digitar_busca)
+        busca.bind("<Return>", lambda _e: self.recarregar())
+        dica(ttk.Button(linha2, text="\u00d7", width=2, style=app.estilo("Neutro.TButton"),
+                        command=self.limpar_busca),
+             "Limpa a busca e mostra todas as amostras."
+             ).pack(side="left", padx=(2, 0))
+
+        ttk.Label(linha2, text="Ordenar por:",
                   style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
         self.ordem_var = tk.StringVar(value=ORDEM_POR_NOME)
-        self.ordem_combo = ttk.Combobox(linha3, textvariable=self.ordem_var, state="readonly",
-                                        width=22, style=app.estilo("TCombobox"))
+        self.ordem_combo = ttk.Combobox(linha2, textvariable=self.ordem_var, state="readonly",
+                                        width=20, style=app.estilo("TCombobox"))
         self.ordem_combo.pack(side="left")
         self.ordem_combo.bind("<<ComboboxSelected>>", lambda _e: self.recarregar())
         dica(self.ordem_combo, "A ordem dos azulejos na página: pelo nome da amostra ou "
-             "por qualquer categoria do banco (número como número, vazios no fim).")
-        self.status = ttk.Label(linha3, text="", style=app.estilo("FracoFundo.TLabel"))
-        self.status.pack(side="right")
+             "por uma categoria do banco (número como número, vazios no fim). A "
+             "categoria escolhida passa a aparecer em cada azulejo.")
 
-        # a seleção pelas caixinhas dos azulejos
+        # linha 3: a seleção e o resumo
+        linha3 = ttk.Frame(barra, style=app.estilo("TFrame"))
+        linha3.pack(fill="x", pady=(8, 8))
         ttk.Label(linha3, text="Seleção:",
-                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
-        dica(ttk.Button(linha3, text="Selecionar todas", style=app.estilo("Neutro.TButton"),
+                  style=app.estilo("Secao.TLabel")).pack(side="left", padx=(0, 6))
+        dica(ttk.Button(linha3, text="Todas", style=app.estilo("Neutro.TButton"),
                         command=self.selecionar_todas),
-             "Marca a caixinha de todas as amostras que estão na página "
-             "(com uma busca ativa, só as que ela mostra). Nos azulejos: clique "
-             "na caixinha ou Ctrl+clique marca uma; Shift+clique marca da última "
-             "marcada até ela."
+             "Marca todas as amostras que estão na página (com uma busca ativa, "
+             "só as que ela mostra). Nos azulejos: clique na caixinha ou "
+             "Ctrl+clique marca uma; Shift+clique marca da última marcada até ela."
              ).pack(side="left")
-        dica(ttk.Button(linha3, text="Limpar seleção", style=app.estilo("Neutro.TButton"),
+        dica(ttk.Button(linha3, text="Nenhuma", style=app.estilo("Neutro.TButton"),
                         command=self.limpar_selecao),
              "Desmarca todas as caixinhas."
              ).pack(side="left", padx=(4, 0))
@@ -487,8 +468,40 @@ class AbaDoBanco(ttk.Frame):
                        command=self.excluir_selecionadas),
             "Apaga do banco as amostras marcadas, com as informações, medições "
             "e espectros delas. Pergunta antes; não tem desfazer.")
-        self.excluir_btn.pack(side="left", padx=(4, 0))
+        self.excluir_btn.pack(side="left", padx=(10, 0))
         self._atualizar_selecao()
+        self.status = ttk.Label(linha3, text="", style=app.estilo("FracoFundo.TLabel"))
+        self.status.pack(side="right")
+
+    def _menu(self, pai, texto, itens):
+        """Um botão que abre um menu com `itens` [(rótulo, comando)]. O
+        menu é do tk puro (o ttk não tem), pintado com o tema à mão."""
+        botao = ttk.Menubutton(pai, text=texto, style=self.app.estilo("TMenubutton"))
+        menu = tk.Menu(botao, tearoff=0)
+        for rotulo, comando in itens:
+            menu.add_command(label=rotulo, command=comando)
+        botao.configure(menu=menu)
+        self.menus.append(menu)
+        self._pintar_menu(menu)
+        return botao
+
+    def _pintar_menu(self, menu):
+        cores = self.app.cores
+        menu.configure(background=cores["campo"], foreground=cores["corpo"],
+                       activebackground=cores["azul"], activeforeground=cores["botao_texto"],
+                       borderwidth=0, relief="flat", font=("Segoe UI", 9))
+
+    def _ao_digitar_busca(self, evento):
+        """Filtra um pouquinho depois da última tecla, não a cada uma."""
+        if evento.keysym in ("Return", "Tab", "Shift_L", "Shift_R", "Control_L", "Control_R"):
+            return
+        if self._busca_job is not None:
+            self.after_cancel(self._busca_job)
+        self._busca_job = self.after(ESPERA_DA_BUSCA_MS, self._buscar_agora)
+
+    def _buscar_agora(self):
+        self._busca_job = None
+        self.recarregar()
 
     def _montar_pagina(self):
         app = self.app
@@ -579,12 +592,23 @@ class AbaDoBanco(ttk.Frame):
         if escolha not in opcoes:
             escolha = ORDEM_POR_NOME
             self.ordem_var.set(escolha)
+        coluna = None
         if escolha != ORDEM_POR_NOME:
             coluna = opcoes.index(escolha) - 1
             todos.sort(key=lambda a: (_chave_de_ordem(
                 (informacoes.get(a["id"]) or [""] * (coluna + 1))[coluna]),
                 a["nome"].casefold()))
         self._ordem = {a["id"]: i for i, a in enumerate(todos)}
+
+        def linha_do_azulejo(valores):
+            """O que o azulejo mostra embaixo do nome: as duas primeiras
+            informações — ou, ordenando por uma categoria, ela na frente
+            ("Estado: Rondônia · Roxinho")."""
+            if coluna is None:
+                return _resumo(valores)
+            valor = valores[coluna] if coluna < len(valores) else ""
+            outras = [v for i, v in enumerate(valores) if v and i != coluna][:1]
+            return " \u00b7 ".join(["%s: %s" % (escolha, valor or "\u2014")] + outras)
 
         # quem sumiu do banco vai embora; quem já tem azulejo é
         # atualizado (de graça, se nada mudou); quem é novo fica na
@@ -599,11 +623,11 @@ class AbaDoBanco(ttk.Frame):
         self.azulejos, self._pendentes = [], []
         for resumo in todos:
             azulejo = self._por_id.get(resumo["id"])
-            valores = informacoes.get(resumo["id"], [])
+            texto = linha_do_azulejo(informacoes.get(resumo["id"], []))
             if azulejo is None:
-                self._pendentes.append((resumo, valores))
+                self._pendentes.append((resumo, texto))
                 continue
-            azulejo.atualizar(resumo, valores)
+            azulejo.atualizar(resumo, texto)
             azulejo.mostrar(resumo["id"] in visiveis)
             if azulejo.visivel:
                 self.azulejos.append(azulejo)
@@ -625,8 +649,8 @@ class AbaDoBanco(ttk.Frame):
         página. A ordem na página é a do banco (por nome), então um
         azulejo novo entra no lugar certo e não no fim."""
         self._lote_job = None
-        for resumo, valores in self._pendentes[:AZULEJOS_POR_LOTE]:
-            azulejo = Azulejo(self, resumo, valores)
+        for resumo, texto in self._pendentes[:AZULEJOS_POR_LOTE]:
+            azulejo = Azulejo(self, resumo, texto)
             self._por_id[resumo["id"]] = azulejo
             azulejo.mostrar(resumo["id"] in self._visiveis)
             azulejo.selecionar(resumo["id"] in self.selecionadas)
@@ -1519,6 +1543,8 @@ class AbaDoBanco(ttk.Frame):
         self.canvas_detalhe.configure(background=cores["fundo"])
         for azulejo in self._por_id.values():
             azulejo.pintar()
+        for menu in self.menus:
+            self._pintar_menu(menu)
 
 
 # ============================================================

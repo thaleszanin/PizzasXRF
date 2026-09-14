@@ -100,7 +100,8 @@ vários `.db` abre várias abas; o título de cada uma nasce igual ao nome
 do arquivo e pode ser trocado (dois cliques na aba, ou "Renomear"). Os
 bancos abertos voltam sozinhos da próxima vez.
 
-**O que entra no banco**
+**O que entra no banco** (na aba do banco, o botão "Adicionar amostras da
+tela" e o menu **Importar ▾**)
 
 * **"Adicionar ao banco de amostras"** (na aba Catalogador, ou
   "Adicionar amostras da tela" na aba do banco): guarda as amostras que
@@ -111,10 +112,10 @@ bancos abertos voltam sozinhos da próxima vez.
   as medições dos três tubos (Ag, Rh, Au) e as informações da planilha
   se juntam na mesma amostra. Reexportar a mesma batelada não duplica:
   a medição que já estava é atualizada.
-* **"Importar .txt/.png exportados…"**: lê de volta os arquivos que o
+* **Importar ▸ Arquivos .txt/.png exportados**: lê de volta os arquivos que o
   próprio programa salvou (o `.png` de mesmo nome entra junto). Também
   precisa do mapeamento.
-* **"Importar espectros (.mca)…"**: o espectro bruto do detector (formato
+* **Importar ▸ Espectros (.mca)**: o espectro bruto do detector (formato
   Amptek: 2048 canais, calibração canal→keV, tempos). O `.mca` tem o
   mesmo nome que o `.txt` da mesma medida (`061025ab.mca`), então o
   mapeamento vale para os dois. No banco ficam as contagens (comprimidas,
@@ -123,12 +124,12 @@ bancos abertos voltam sozinhos da próxima vez.
   o espectro aparece embaixo da medição do mesmo arquivo. E ao "Adicionar
   amostras da tela", o `.mca` que estiver ao lado do `.txt` entra
   sozinho — não precisa do botão.
-* **"Importar outro banco (.db)…"**: junta a este banco tudo o que há em
+* **Importar ▸ Outro banco (.db)**: junta a este banco tudo o que há em
   outro arquivo `.db` — amostras, informações, fotos e medições. O que
   já está preenchido aqui não é sobrescrito; as medições repetidas são
   atualizadas, não duplicadas. (Para abrir um `.db` numa aba própria, o
   botão é "Abrir banco (.db)…", na aba Catalogador.)
-* **"Importar lista de amostras (.xlsx)…"**: as informações de cada amostra. A
+* **Importar ▸ Lista de amostras (.xlsx)**: as informações de cada amostra. A
   regra de forma é uma só — **a primeira linha traz os nomes das
   categorias e uma das colunas traz o nome da amostra** (o mesmo nome
   do mapeamento). O programa sugere a coluna que mais bate com os nomes
@@ -151,16 +152,19 @@ bancos abertos voltam sozinhos da próxima vez.
   espectros — pergunta antes;
 * **"Ordenar por"** muda a ordem dos azulejos: pelo nome da amostra ou
   por qualquer categoria do banco (número ordena como número, vazios no
-  fim);
+  fim). A categoria escolhida passa a aparecer na linha de cada azulejo;
 * ao lado de cada espectro, **"Ver em escala linear/log"** alterna a
   escala das contagens (o eixo de energia é sempre 0–25 keV). A log fica
   guardada no banco; a linear é desenhada na hora e fica em memória;
 * todo botão tem uma dica: deixe o mouse parado em cima dele que aparece
   uma linha explicando o que ele faz;
-* **"Salvar cópia (.db)…"** baixa o banco num arquivo (o `.db` aberto já
-  é gravado a cada mudança; a cópia é para levar, mandar ou guardar);
-* **"Exportar JSON…"** gera o `.json` do catálogo e, ao lado dele, a
-  pasta `dados/` com as imagens. Uma entrada por amostra:
+* a busca filtra a página enquanto você digita (nome, código de arquivo
+  ou qualquer informação);
+* **Exportar ▸ Salvar uma cópia do banco (.db)** baixa o banco num arquivo
+  (o `.db` aberto já é gravado a cada mudança; a cópia é para levar,
+  mandar ou guardar);
+* **Exportar ▸ Gerar o JSON do catálogo** gera o `.json` e, ao lado dele,
+  a pasta `dados/` com as imagens. Uma entrada por amostra:
 
 ```json
 {
