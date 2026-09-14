@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 
 from ..nucleo.tabela_periodica import PERIODIC_TABLE
@@ -131,6 +132,7 @@ class BancoDeAmostras:
             os.makedirs(destino, exist_ok=True)
         self.con = sqlite3.connect(self.caminho)
         self.con.row_factory = sqlite3.Row
+        self._transacoes = 0   # quantos `transacao()` estão abertos
         self.con.execute("PRAGMA foreign_keys = ON")
         try:
             self._preparar()
@@ -154,7 +156,23 @@ class BancoDeAmostras:
                 "Este banco foi criado por uma versão mais nova do programa "
                 "(formato %d, este entende até o %d). Atualize o programa "
                 "antes de abri-lo." % (versao, VERSAO))
-        # (quando o formato mudar, as migrações de versão entram aqui)
+        elif versao < VERSAO:
+            self._migrar(versao)
+
+    def _migrar(self, versao):
+        """Traz um banco de formato antigo para o de agora, um degrau
+        por vez, numa transação só."""
+        with self.con:  # (antes de `transacao()` valer)
+            if versao < 2:
+                self.con.execute(
+                    "ALTER TABLE amostras ADD COLUMN chave TEXT NOT NULL DEFAULT ''")
+                self.con.executemany(
+                    "UPDATE amostras SET chave = ? WHERE id = ?",
+                    [(normalizar_nome(l["nome"]), l["id"])
+                     for l in self.con.execute("SELECT id, nome FROM amostras")])
+                self.con.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_amostras_chave ON amostras (chave)")
+            self.con.execute("PRAGMA user_version = %d" % VERSAO)
 
     def _ja_tem_tabelas(self):
         return self.con.execute(
@@ -162,7 +180,7 @@ class BancoDeAmostras:
 
     def _criar_do_zero(self):
         nome = os.path.splitext(os.path.basename(self.caminho))[0]
-        with self.con:
+        with self.con:  # (antes de `transacao()` valer)
             self.con.executescript(ESQUEMA)
             self.con.executemany(
                 "INSERT INTO meta (chave, valor) VALUES (?, ?)",
@@ -178,6 +196,34 @@ class BancoDeAmostras:
 
     def __exit__(self, *_):
         self.fechar()
+
+    @contextmanager
+    def transacao(self):
+        """Junta várias operações numa transação só.
+
+            with banco.transacao():
+                for bloco in blocos:
+                    banco.guardar_medicao(...)
+
+        Cada operação do banco já é atômica sozinha; o que isto muda é
+        o CUSTO: cada commit é uma escrita sincronizada no disco, e
+        importar 60 medições com 60 commits demorava mais que com um.
+        Pode aninhar — só a transação de fora é que grava (ou desfaz
+        tudo, se algo der errado).
+        """
+        if self._transacoes:
+            self._transacoes += 1
+            try:
+                yield
+            finally:
+                self._transacoes -= 1
+            return
+        self._transacoes = 1
+        try:
+            with self.con:
+                yield
+        finally:
+            self._transacoes = 0
 
     def salvar_copia(self, caminho):
         """Grava uma cópia íntegra do banco em outro arquivo — é o
@@ -204,7 +250,7 @@ class BancoDeAmostras:
         return padrao if linha is None else linha[0]
 
     def definir_meta(self, chave, valor):
-        with self.con:
+        with self.transacao():
             self.con.execute(
                 "INSERT INTO meta (chave, valor) VALUES (?, ?) "
                 "ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor",
@@ -251,7 +297,7 @@ class BancoDeAmostras:
             return existente
         proxima = self.con.execute(
             "SELECT COALESCE(MAX(ordem), -1) + 1 FROM categorias").fetchone()[0]
-        with self.con:
+        with self.transacao():
             cur = self.con.execute(
                 "INSERT INTO categorias (nome, ordem) VALUES (?, ?)", (nome, proxima))
         return cur.lastrowid
@@ -261,7 +307,7 @@ class BancoDeAmostras:
         if not nome:
             raise ErroDoBanco("A categoria precisa de um nome.")
         try:
-            with self.con:
+            with self.transacao():
                 self.con.execute("UPDATE categorias SET nome = ? WHERE id = ?",
                                  (nome, categoria_id))
         except sqlite3.IntegrityError:
@@ -277,7 +323,7 @@ class BancoDeAmostras:
         if not 0 <= vizinha < len(lista):
             return False
         lista[posicao], lista[vizinha] = lista[vizinha], lista[posicao]
-        with self.con:
+        with self.transacao():
             self.con.executemany("UPDATE categorias SET ordem = ? WHERE id = ?",
                                  [(i, c["id"]) for i, c in enumerate(lista)])
         return True
@@ -288,7 +334,7 @@ class BancoDeAmostras:
         quantas = self.con.execute(
             "SELECT COUNT(*) FROM atributos WHERE categoria_id = ? AND valor <> ''",
             (categoria_id,)).fetchone()[0]
-        with self.con:
+        with self.transacao():
             self.con.execute("DELETE FROM categorias WHERE id = ?", (categoria_id,))
         return quantas
 
@@ -335,24 +381,23 @@ class BancoDeAmostras:
 
     def amostra_por_nome(self, nome):
         """O id da amostra com esse nome (ignorando maiúsculas e
-        espaços), ou None."""
+        espaços), ou None. É uma busca pelo índice da chave."""
         alvo = normalizar_nome(nome)
         if not alvo:
             return None
-        for linha in self.con.execute("SELECT id, nome FROM amostras"):
-            if normalizar_nome(linha["nome"]) == alvo:
-                return linha["id"]
-        return None
+        linha = self.con.execute("SELECT id FROM amostras WHERE chave = ?",
+                                 (alvo,)).fetchone()
+        return None if linha is None else linha[0]
 
     def criar_amostra(self, nome):
         nome = (nome or "").strip()
         if not nome:
             raise ErroDoBanco("A amostra precisa de um nome.")
         try:
-            with self.con:
+            with self.transacao():
                 cur = self.con.execute(
-                    "INSERT INTO amostras (nome, criado_em) VALUES (?, ?)",
-                    (nome, _agora()))
+                    "INSERT INTO amostras (nome, chave, criado_em) VALUES (?, ?, ?)",
+                    (nome, normalizar_nome(nome), _agora()))
         except sqlite3.IntegrityError:
             raise ErroDoBanco('Já existe uma amostra "%s" neste banco.' % nome)
         return cur.lastrowid
@@ -371,13 +416,13 @@ class BancoDeAmostras:
         outra = self.amostra_por_nome(nome)
         if outra is not None and outra != amostra_id:
             raise ErroDoBanco('Já existe uma amostra "%s" neste banco.' % nome)
-        with self.con:
-            self.con.execute("UPDATE amostras SET nome = ? WHERE id = ?",
-                             (nome, amostra_id))
+        with self.transacao():
+            self.con.execute("UPDATE amostras SET nome = ?, chave = ? WHERE id = ?",
+                             (nome, normalizar_nome(nome), amostra_id))
 
     def excluir_amostra(self, amostra_id):
         # atributos, medições e leituras somem junto (ON DELETE CASCADE)
-        with self.con:
+        with self.transacao():
             self.con.execute("DELETE FROM amostras WHERE id = ?", (amostra_id,))
 
     def total_de_amostras(self):
@@ -395,7 +440,7 @@ class BancoDeAmostras:
 
     def definir_foto(self, amostra_id, dados):
         """`dados` são os bytes da imagem, ou None para tirar a foto."""
-        with self.con:
+        with self.transacao():
             self.con.execute("UPDATE amostras SET foto = ? WHERE id = ?",
                              (dados, amostra_id))
 
@@ -430,7 +475,7 @@ class BancoDeAmostras:
 
     def definir_atributo(self, amostra_id, categoria_id, valor):
         valor = "" if valor is None else str(valor).strip()
-        with self.con:
+        with self.transacao():
             self._definir_atributo(amostra_id, categoria_id, valor)
 
     def _definir_atributo(self, amostra_id, categoria_id, valor):
@@ -456,22 +501,36 @@ class BancoDeAmostras:
         Devolve (amostras atualizadas, amostras criadas, linhas ignoradas).
         """
         atualizadas, criadas, ignoradas = 0, 0, []
-        with self.con:
+        with self.transacao():
             ids = [self.criar_categoria(c) for c in categorias]
+            # uma consulta pra todas as amostras, e todos os valores numa
+            # inserção só: 300 linhas entram em milissegundos
+            existentes = {l["chave"]: l["id"] for l in
+                          self.con.execute("SELECT id, chave FROM amostras")}
+            agora = _agora()
+            valores_novos = []
             for nome, valores in linhas:
-                amostra_id = self.amostra_por_nome(nome)
+                chave = normalizar_nome(nome)
+                amostra_id = existentes.get(chave)
                 if amostra_id is None:
                     if not criar_amostras:
                         ignoradas.append(nome)
                         continue
-                    amostra_id = self.criar_amostra(nome)
+                    amostra_id = self.con.execute(
+                        "INSERT INTO amostras (nome, chave, criado_em) VALUES (?, ?, ?)",
+                        (nome.strip(), chave, agora)).lastrowid
+                    existentes[chave] = amostra_id
                     criadas += 1
                 else:
                     atualizadas += 1
                 for categoria_id, valor in zip(ids, valores):
                     valor = "" if valor is None else str(valor).strip()
                     if valor:
-                        self._definir_atributo(amostra_id, categoria_id, valor)
+                        valores_novos.append((amostra_id, categoria_id, valor))
+            self.con.executemany(
+                "INSERT INTO atributos (amostra_id, categoria_id, valor) VALUES (?, ?, ?) "
+                "ON CONFLICT(amostra_id, categoria_id) DO UPDATE SET valor = excluded.valor",
+                valores_novos)
         return atualizadas, criadas, ignoradas
 
     # ============================================================
@@ -548,7 +607,7 @@ class BancoDeAmostras:
             ja = self.con.execute(
                 "SELECT id FROM medicoes WHERE codigo = ? COLLATE NOCASE AND tubo = ?",
                 (codigo, tubo or "Nenhum")).fetchone()
-        with self.con:
+        with self.transacao():
             if ja is None:
                 cur = self.con.execute("""
                     INSERT INTO medicoes (amostra_id, tubo, codigo, grandeza, unidade,
@@ -571,7 +630,7 @@ class BancoDeAmostras:
         return medicao_id, nova
 
     def excluir_medicao(self, medicao_id):
-        with self.con:
+        with self.transacao():
             self.con.execute("DELETE FROM medicoes WHERE id = ?", (medicao_id,))
 
     # ---------- o que o JSON precisa ----------

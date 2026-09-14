@@ -42,16 +42,14 @@ Os papéis (o nome do estilo sem o tema na frente):
     TCombobox / TSpinbox / Horizontal.TScale / Treeview / TScrollbar
     TEntry / TCheckbutton         as caixas de texto e de marcar
     TNotebook / TNotebook.Tab     as abas (o catalogador e cada banco)
-    Item.TFrame / ItemRealce.TFrame
-                                  o azulejo de cada amostra na página do
-                                  banco, e ele com o mouse em cima
-                                  (Realce.TFrame: o que fica dentro dele)
     Corpo.TLabel / Subtitulo.TLabel
                                   texto normal e título de seção, dentro
                                   do cartão
-    Chip.TLabel / ChipFraco.TLabel
-                                  a etiqueta de cada tubo medido (Ag, Rh,
-                                  Au) e a de "sem medição"
+    Chip.TLabel                   a etiqueta do tubo de uma medição
+
+Os azulejos da página do banco não passam por estilo: são desenhos no
+canvas, pintados com as cores de `TEMAS` (inclusive "realce", a cor do
+azulejo com o mouse em cima).
 
 Os estilos de botão têm o canto levemente arredondado, o que o ttk não
 faz sozinho: quem cuida disso é `cantos.py`, que troca o fundo do botão
@@ -207,7 +205,7 @@ def _estilos_do_tema(root, style, tema):
     style.configure(E("TLabel"), background=cores["fundo"],
                     foreground=cores["corpo"])
     # (Titulo.TLabel e Fraco.TLabel, os de dentro do cartão, nascem mais
-    # abaixo, junto com as versões deles para o azulejo em realce)
+    # abaixo, junto com os outros textos da tela de uma amostra)
     style.configure(E("FracoFundo.TLabel"), background=cores["fundo"],
                     foreground=cores["fraco"])
     style.configure(E("Aviso.TLabel"), background=cores["painel"],
@@ -232,26 +230,20 @@ def _estilos_do_tema(root, style, tema):
         _botao(root, style, tema, prefixo + "Perigo.TButton", cores["vermelho"],
                cores["vermelho_claro"], cores["vermelho"], cores, atras)
 
-    # a página do banco: o azulejo de cada amostra e os textos dele
-    style.configure(E("Item.TFrame"), background=cores["painel"],
-                    bordercolor=cores["borda"], relief="solid", borderwidth=1)
-    style.configure(E("ItemRealce.TFrame"), background=cores["realce"],
-                    bordercolor=cores["azul"], relief="solid", borderwidth=1)
-    style.configure(E("Realce.TFrame"), background=cores["realce"])
-    for atras, sufixo in ((cores["painel"], ""), (cores["realce"], "Realce.")):
-        style.configure(E(sufixo + "Titulo.TLabel"), background=atras,
-                        foreground=cores["texto"], font=(FONTE, 12, "bold"))
-        style.configure(E(sufixo + "Fraco.TLabel"), background=atras,
-                        foreground=cores["fraco"])
-        style.configure(E(sufixo + "Corpo.TLabel"), background=atras,
-                        foreground=cores["corpo"])
+    # a tela de uma amostra do banco: os textos dentro das seções e a
+    # etiqueta do tubo de cada medição. (Os azulejos da página não têm
+    # estilo: são desenhados no canvas, com estas mesmas cores.)
+    style.configure(E("Titulo.TLabel"), background=cores["painel"],
+                    foreground=cores["texto"], font=(FONTE, 12, "bold"))
+    style.configure(E("Fraco.TLabel"), background=cores["painel"],
+                    foreground=cores["fraco"])
+    style.configure(E("Corpo.TLabel"), background=cores["painel"],
+                    foreground=cores["corpo"])
     style.configure(E("Subtitulo.TLabel"), background=cores["painel"],
                     foreground=cores["texto"], font=(FONTE, 10, "bold"))
     style.configure(E("Chip.TLabel"), background=cores["azul"],
                     foreground=cores["botao_texto"], font=(FONTE, 8, "bold"),
                     padding=(6, 1))
-    style.configure(E("ChipFraco.TLabel"), background=cores["neutro"],
-                    foreground=cores["fraco"], font=(FONTE, 8), padding=(6, 1))
 
     style.configure(E("TEntry"), fieldbackground=cores["campo"],
                     foreground=cores["corpo"], insertcolor=cores["corpo"],

@@ -183,6 +183,13 @@ def escrever_texto(caminho, texto):
     return caminho
 
 
+def escrever_bytes(caminho, dados):
+    """Grava um arquivo binário (o .png já pronto) e devolve o caminho."""
+    with open(caminho, "wb") as f:
+        f.write(dados)
+    return caminho
+
+
 # ============================================================
 # Imagem compilada
 # ============================================================
@@ -198,13 +205,24 @@ class PilhaDeImagens:
     def __init__(self):
         self._partes = []
 
-    def adicionar(self, fig):
+    @staticmethod
+    def pixels(fig):
+        """Os pixels de uma figura JÁ rasterizada (por `canvas.draw()` ou
+        pelos passos de `graficos.figura.passos_da_rasterizacao`), sem
+        o canal alfa: o fundo já é branco e assim a imagem final ocupa
+        3/4 da memória."""
         import numpy as np
 
+        return np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+
+    def adicionar(self, fig):
         fig.canvas.draw()
-        # sem o canal alfa: o fundo já é branco e assim a imagem final
-        # ocupa 3/4 da memória
-        self._partes.append(np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy())
+        self.adicionar_pixels(self.pixels(fig))
+
+    def adicionar_pixels(self, pixels):
+        """Uma faixa já rasterizada — é o que a exportação em lote usa,
+        porque ela desenha em pedaços e não quer um `draw()` inteiro."""
+        self._partes.append(pixels)
 
     def __len__(self):
         return len(self._partes)

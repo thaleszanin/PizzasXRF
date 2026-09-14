@@ -8,8 +8,9 @@ from .barras import (passos_da_barra_empilhada, passos_das_barras,
                      passos_do_pareto)
 from .tipos import TIPO_PADRAO, TIPOS, desenhador
 from .tema import pintar
-from .figura import (build_sample_figure, draw_sample_figure, paineis,
-                     passos_da_rasterizacao, passos_do_desenho)
+from .figura import (ESPERA, PNG_DPI, build_sample_figure, draw_sample_figure, paineis,
+                     passos_da_rasterizacao, passos_do_desenho, passos_do_png,
+                     png_da_figura)
 
 __all__ = [
     "PALETTE",
@@ -34,4 +35,8 @@ __all__ = [
     "draw_sample_figure",
     "passos_do_desenho",
     "passos_da_rasterizacao",
+    "passos_do_png",
+    "png_da_figura",
+    "PNG_DPI",
+    "ESPERA",
 ]

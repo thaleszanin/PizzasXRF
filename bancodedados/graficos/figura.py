@@ -6,6 +6,11 @@ gráfico usado neles é escolhido de fora: pizza, rosca, barras, barra
 empilhada ou Pareto. Quem tem a lista é `graficos/tipos.py`.
 """
 
+import io
+import threading
+from math import ceil, floor
+
+import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
@@ -19,6 +24,17 @@ FIG_SIZE = (14, 4.4)
 # matplotlib) porque o tamanho em PIXELS entra na conta: é o espaço que o
 # cartão reserva na tela e o tamanho de cada faixa da imagem compilada.
 FIG_DPI = 100
+# Pontos por polegada do .png SALVO (o dobro da tela: sai nítido
+# impresso e num slide, e 2780 px de largura ainda abrem em qualquer
+# programa).
+PNG_DPI = 200
+# A margem em volta do desenho no .png salvo, em polegadas — o mesmo
+# 0,1 que o `bbox_inches="tight"` do matplotlib usa.
+MARGEM_DO_PNG = 0.1
+# O que `passos_do_png` cede enquanto a compressão anda em outra
+# thread: quem toca o gerador pode esperar um pouco em vez de chamar
+# `next()` de novo na hora.
+ESPERA = "espera"
 # Quantas vezes, no máximo, o eixo comum das três pizzas é recalculado.
 RODADAS_DE_AJUSTE = 3
 # Crescimento (em unidades de dado) abaixo do qual o eixo já é "o mesmo".
@@ -142,6 +158,78 @@ def passos_da_rasterizacao(fig):
         if artista.get_visible():
             artista.draw(renderer)
             yield
+
+
+def passos_do_png(fig, elements, major, trace, total, title, tipo=TIPO_PADRAO,
+                  dpi=PNG_DPI):
+    """A figura de uma amostra como os bytes de um .png, em pedaços.
+
+    É o que a exportação e o banco de amostras gravam. Antes era um
+    `savefig(bbox_inches="tight")` numa tacada só: uns 300 ms com a
+    janela parada, por amostra — numa batelada de 60, vinte segundos
+    de engasgo. Aqui o mesmo trabalho sai fatiado, como o desenho dos
+    cartões: os pedaços de `passos_do_desenho`, depois a rasterização
+    a `dpi` um gráfico por vez, e por fim o recorte e a compressão.
+
+    O recorte é o mesmo que o "tight" faria: a caixa que envolve tudo
+    o que foi desenhado, com a margem de sempre, só que cortada do
+    que já está rasterizado em vez de desenhar a figura duas vezes
+    (uma pra medir e outra pra valer). Sai igual, pixel por pixel, a
+    menos de um pixel de arredondamento na borda.
+
+    O valor do gerador (o `return`) são os bytes: `png = yield from
+    passos_do_png(...)`. `png_da_figura` faz tudo de uma vez.
+    """
+    yield from passos_do_desenho(fig, elements, major, trace, total, title, tipo)
+    dpi_da_tela = fig.get_dpi()
+    fig.set_dpi(dpi)
+    try:
+        yield from passos_da_rasterizacao(fig)
+        renderer = fig.canvas.get_renderer()
+        caixa = fig.get_tightbbox(renderer).padded(MARGEM_DO_PNG)  # em polegadas
+        yield
+        pixels = np.asarray(renderer.buffer_rgba())
+        altura_px, largura_px = pixels.shape[:2]
+        altura_in = fig.get_figheight()
+        x0, x1 = max(0, floor(caixa.x0 * dpi)), min(largura_px, ceil(caixa.x1 * dpi))
+        # o buffer conta as linhas de cima pra baixo; a caixa, de baixo pra cima
+        y0 = max(0, floor((altura_in - caixa.y1) * dpi))
+        y1 = min(altura_px, ceil((altura_in - caixa.y0) * dpi))
+        recorte = np.ascontiguousarray(pixels[y0:y1, x0:x1])
+    finally:
+        fig.set_dpi(dpi_da_tela)
+
+    # a compressão do PNG (uns 60 ms) é o único pedaço que não dá pra
+    # fatiar — mas o zlib solta o GIL, então ela roda numa thread e o
+    # gerador só cede ESPERA até ela acabar
+    from PIL import Image
+    resultado = []
+
+    def comprimir():
+        saida = io.BytesIO()
+        Image.fromarray(recorte).save(saida, format="png")
+        resultado.append(saida.getvalue())
+
+    trabalho = threading.Thread(target=comprimir, daemon=True)
+    trabalho.start()
+    while trabalho.is_alive():
+        yield ESPERA
+    return resultado[0]
+
+
+def png_da_figura(elements, major, trace, total, title, tipo=TIPO_PADRAO, dpi=PNG_DPI):
+    """Os bytes do .png de uma amostra, de uma vez só (pra script e pro
+    botão de salvar UMA imagem, onde não há fila)."""
+    fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
+    FigureCanvasAgg(fig)
+    try:
+        gerador = passos_do_png(fig, elements, major, trace, total, title, tipo, dpi)
+        while True:
+            next(gerador)
+    except StopIteration as fim:
+        return fim.value
+    finally:
+        fig.clear()
 
 
 def _uniao(limites):

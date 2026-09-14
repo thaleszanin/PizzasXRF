@@ -50,7 +50,11 @@ já estava é ATUALIZADA com a classificação e a imagem novas.
 # Versão do formato. Sobe de 1 em 1 quando as tabelas mudam; fica
 # gravada no próprio arquivo (PRAGMA user_version) para o programa saber
 # o que precisa migrar num banco antigo.
-VERSAO = 1
+#   1  as tabelas de sempre
+#   2  `amostras.chave`: o nome normalizado, com índice único — achar
+#      uma amostra pelo nome virou uma busca por índice, não uma
+#      varredura em Python (a importação da planilha era O(n²))
+VERSAO = 2
 
 # Os grupos em que uma leitura pode cair.
 MAJORITARIO, TRACO, DESCARTADO = "majoritário", "traço", "descartado"
@@ -74,10 +78,14 @@ CREATE TABLE categorias (
 
 CREATE TABLE amostras (
     id        INTEGER PRIMARY KEY,
-    nome      TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    nome      TEXT    NOT NULL,
+    chave     TEXT    NOT NULL,           -- o nome normalizado (ver repositorio)
     foto      BLOB,                       -- PNG/JPG da amostra, se houver
     criado_em TEXT    NOT NULL
 );
+
+-- é pela chave que o mapeamento e a planilha encontram a amostra
+CREATE UNIQUE INDEX ux_amostras_chave ON amostras (chave);
 
 CREATE TABLE atributos (
     amostra_id   INTEGER NOT NULL REFERENCES amostras(id)   ON DELETE CASCADE,

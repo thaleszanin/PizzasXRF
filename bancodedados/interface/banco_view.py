@@ -32,16 +32,27 @@ arquivo, e sem nome a medição não tem onde se pendurar.
 
 Sobre desempenho
 ----------------
-Os azulejos seguem a mesma ideia dos cartões do catalogador: cada um é
-um item do canvas, posicionado por nós, e nascem em lotes com o Tk
-respirando entre um e outro. Uma lista de 300 amostras aparece
-progressivamente em vez de travar a janela por um segundo.
+Os azulejos NÃO são widgets: são retângulos e textos desenhados direto
+no canvas. Um azulejo de widgets (quadro, dois rótulos, etiquetas) são
+seis widgets do Tk, cada um com layout próprio — 222 amostras davam
+1300 widgets, 0,6 s pra nascer e uma rolagem pesada; mil amostras
+seriam 3 s. Como itens do canvas, os 222 nascem em poucos
+milissegundos e a rolagem é o canvas movendo desenhos, que é o que ele
+faz de melhor. O preço é pintar o realce e o tema à mão (`pintar`), e
+descobrir quem está debaixo do mouse por aritmética da grade
+(`_azulejo_em`), já que não há widget pra receber o clique.
+
+E, uma vez nascidos, eles FICAM: `recarregar` relê o banco e só mexe
+no que mudou — atualiza o azulejo de quem ganhou uma medição, cria os
+das amostras novas, esconde (não destrói) os que a busca deixou de
+fora. Voltar da amostra pra lista não custa nada.
 """
 
 import io
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from tkinter import font as tkfont
 
 from ..banco import (ErroDoBanco, coluna_sugerida,
                      exportar_json, imagem_ao_lado, ler_planilha,
@@ -53,22 +64,32 @@ from .dialogos import Dialogo, perguntar_texto
 AZULEJO_LARGURA, AZULEJO_ALTURA = 300, 112
 ESPACO, MARGEM = 12, 12
 # Quantos azulejos nascem por vez (ver o cabeçalho).
-AZULEJOS_POR_LOTE = 24
+AZULEJOS_POR_LOTE = 80
 # Quanto esperar depois do último arrasto da janela pra redistribuir.
 ESPERA_REDIMENSIONAR_MS = 150
 # A imagem de uma medição, na tela: nunca mais larga que isso.
 IMAGEM_LARGURA_MAX = 1100
 FOTO_LARGURA_MAX = 360
-# Quantos caracteres da linha de informações cabem no azulejo.
-RESUMO_MAX = 44
+# O recheio do azulejo e as etiquetas (Ag, Rh, Au) no pé dele.
+RECHEIO, ETIQUETA_RECHEIO, ETIQUETA_ALTURA = 10, 6, 18
+FONTE = "Segoe UI"
 
 
-def _resumo(valores, maximo=RESUMO_MAX):
+def _resumo(valores):
     """"Roxinho · Peltogyne paniculata" — as duas primeiras informações
-    preenchidas, cortadas pra caber numa linha do azulejo."""
-    partes = [v for v in valores if v][:2]
-    texto = " · ".join(partes)
-    return texto if len(texto) <= maximo else texto[:maximo - 1].rstrip() + "…"
+    preenchidas. Quem corta pra caber na largura é o azulejo."""
+    return " · ".join([v for v in valores if v][:2])
+
+
+def _cortar(texto, fonte, largura):
+    """O texto encurtado (com reticências) até caber em `largura` px."""
+    if fonte.measure(texto) <= largura:
+        return texto
+    fim = len(texto)
+    while fim > 1 and fonte.measure(texto[:fim].rstrip() + "…") > largura:
+        # dá passos proporcionais ao excesso, em vez de um caractere por vez
+        fim -= max(1, fim // 8)
+    return texto[:fim].rstrip() + "…"
 
 
 def _imagem_tk(dados, largura_max):
@@ -80,7 +101,9 @@ def _imagem_tk(dados, largura_max):
             im.load()
             if im.width > largura_max:
                 altura = max(1, int(im.height * largura_max / im.width))
-                im = im.resize((largura_max, altura), Image.LANCZOS)
+                # `reducing_gap` encolhe por um fator inteiro (barato)
+                # antes do filtro fino: 3x mais rápido, sem diferença à vista
+                im = im.resize((largura_max, altura), Image.LANCZOS, reducing_gap=3.0)
             foto = ImageTk.PhotoImage(im)
             return foto, foto.width(), foto.height()
     except Exception:
@@ -102,93 +125,137 @@ def _para_png(dados):
 # ============================================================
 
 class Azulejo:
-    """Uma amostra na página. Um quadro fixo, posicionado no canvas pela
-    aba; o realce ao passar o mouse é só troca de estilo."""
+    """Uma amostra na página: um retângulo com o nome, a linha de
+    informações e as etiquetas dos tubos, desenhados no canvas.
+
+    Cada item leva a etiqueta (tag) do azulejo, então mostrar, esconder
+    e mover é uma chamada por azulejo, não por item.
+    """
 
     def __init__(self, aba, resumo, informacoes):
         self.aba = aba
+        self.canvas = aba.canvas
         self.amostra_id = resumo["id"]
+        self.tag = "az%d" % resumo["id"]
         self.x = self.y = 0
         self.largura = AZULEJO_LARGURA
-        app = aba.app
-        self.frame = ttk.Frame(aba.canvas, style=app.estilo("Item.TFrame"),
-                               padding=10, width=AZULEJO_LARGURA, height=AZULEJO_ALTURA)
-        self.frame.pack_propagate(False)
+        self.chave = None
+        self.visivel = True
+        self.realcado = False
+        self._detalhe_inteiro = ""
+        # as fontes são da janela (uma vez só), não de cada azulejo
+        self._fontes = getattr(aba.app, "fontes_dos_azulejos", None)
+        if self._fontes is None:
+            self._fontes = aba.app.fontes_dos_azulejos = {
+                "nome": tkfont.Font(family=FONTE, size=12, weight="bold"),
+                "detalhe": tkfont.Font(family=FONTE, size=9),
+                "chip": tkfont.Font(family=FONTE, size=8, weight="bold")}
+        c, tag = self.canvas, self.tag
+        self.fundo = c.create_rectangle(0, 0, 1, 1, width=1, tags=(tag, "azulejo"))
+        self.nome = c.create_text(0, 0, anchor="nw", font=self._fontes["nome"], tags=(tag,))
+        self.detalhe = c.create_text(0, 0, anchor="nw", font=self._fontes["detalhe"],
+                                     tags=(tag,))
+        self.chips = []   # [(retângulo, texto, é_forte)]
+        self.atualizar(resumo, informacoes)
+        self.pintar()
 
-        nome = ttk.Label(self.frame, text=resumo["nome"], anchor="w",
-                         style=app.estilo("Titulo.TLabel"))
-        nome.pack(fill="x")
+    # ---------- conteúdo ----------
+
+    def atualizar(self, resumo, informacoes):
+        """Põe no azulejo o que o banco diz agora. Sai na hora se nada
+        mudou — é o que faz `recarregar` custar quase nada."""
         texto = _resumo(informacoes) or "sem informações da planilha"
-        detalhe = ttk.Label(self.frame, text=texto, anchor="w",
-                            style=app.estilo("Fraco.TLabel"))
-        detalhe.pack(fill="x", pady=(2, 0))
-
-        etiquetas = ttk.Frame(self.frame, style=app.estilo("Painel.TFrame"))
-        etiquetas.pack(fill="x", side="bottom")
-        self._realcaveis = [(self.frame, "Item.TFrame", "ItemRealce.TFrame"),
-                            (nome, "Titulo.TLabel", "Realce.Titulo.TLabel"),
-                            (detalhe, "Fraco.TLabel", "Realce.Fraco.TLabel"),
-                            (etiquetas, "Painel.TFrame", "Realce.TFrame")]
-        if resumo["tubos"]:
-            for tubo in resumo["tubos"]:
-                ttk.Label(etiquetas, text=tubo,
-                          style=app.estilo("Chip.TLabel")).pack(side="left", padx=(0, 4))
-        else:
-            ttk.Label(etiquetas, text="sem medição",
-                      style=app.estilo("ChipFraco.TLabel")).pack(side="left")
-        if resumo["tem_foto"]:
-            ttk.Label(etiquetas, text="foto",
-                      style=app.estilo("ChipFraco.TLabel")).pack(side="left")
-
-        for widget in self._todos(self.frame):
-            widget.bind("<Button-1>", self._clique)
-            widget.bind("<Enter>", self._entrou)
-            widget.bind("<Leave>", self._saiu)
-        self.item = aba.canvas.create_window(0, 0, window=self.frame, anchor="nw")
-
-    @staticmethod
-    def _todos(widget):
-        lista = [widget]
-        for filho in widget.winfo_children():
-            lista.extend(Azulejo._todos(filho))
-        return lista
-
-    def _clique(self, _evento=None):
-        self.aba.abrir_amostra(self.amostra_id)
-
-    def _entrou(self, _evento=None):
-        self._realcar(True)
-
-    def _saiu(self, _evento=None):
-        # sair de um rótulo pro quadro também é "Leave": só apaga o
-        # realce quando o mouse saiu do azulejo inteiro
-        self.frame.after_idle(self._conferir)
-
-    def _conferir(self):
-        try:
-            x = self.frame.winfo_pointerx() - self.frame.winfo_rootx()
-            y = self.frame.winfo_pointery() - self.frame.winfo_rooty()
-        except tk.TclError:
+        chave = (resumo["nome"], texto, tuple(resumo["tubos"]), resumo["tem_foto"])
+        if chave == self.chave:
             return
-        dentro = 0 <= x < self.frame.winfo_width() and 0 <= y < self.frame.winfo_height()
-        self._realcar(dentro)
+        self.chave = chave
+        self.canvas.itemconfigure(self.nome, text=resumo["nome"])
+        self._detalhe_inteiro = texto
+        self._ajustar_detalhe()
+        for retangulo, rotulo, _ in self.chips:
+            self.canvas.delete(retangulo, rotulo)
+        self.chips = []
+        for tubo in resumo["tubos"]:
+            self._etiqueta(tubo, True)
+        if not resumo["tubos"]:
+            self._etiqueta("sem medição", False)
+        if resumo["tem_foto"]:
+            self._etiqueta("foto", False)
+        self._dispor_chips()
+        self.pintar()
 
-    def _realcar(self, sim):
-        estilo = self.aba.app.estilo
-        for widget, normal, realce in self._realcaveis:
-            widget.configure(style=estilo(realce if sim else normal))
+    def _etiqueta(self, texto, forte):
+        c = self.canvas
+        retangulo = c.create_rectangle(0, 0, 1, 1, width=0, tags=(self.tag,))
+        rotulo = c.create_text(0, 0, text=texto, anchor="w", font=self._fontes["chip"],
+                               tags=(self.tag,))
+        self.chips.append((retangulo, rotulo, forte))
+
+    def _ajustar_detalhe(self):
+        largura = self.largura - 2 * RECHEIO
+        self.canvas.itemconfigure(
+            self.detalhe, text=_cortar(self._detalhe_inteiro, self._fontes["detalhe"], largura))
+
+    # ---------- posição ----------
 
     def mover(self, x, y, largura):
-        if (x, y) != (self.x, self.y):
-            self.x, self.y = x, y
-            self.aba.canvas.coords(self.item, x, y)
-        if largura != self.largura:
-            self.largura = largura
-            self.aba.canvas.itemconfigure(self.item, width=largura)
+        if (x, y, largura) == (self.x, self.y, self.largura):
+            return
+        mudou_largura = largura != self.largura
+        self.x, self.y, self.largura = x, y, largura
+        c = self.canvas
+        c.coords(self.fundo, x, y, x + largura, y + AZULEJO_ALTURA)
+        c.coords(self.nome, x + RECHEIO, y + RECHEIO)
+        c.coords(self.detalhe, x + RECHEIO, y + RECHEIO + 26)
+        if mudou_largura:
+            self._ajustar_detalhe()
+        self._dispor_chips()
+
+    def _dispor_chips(self):
+        c = self.canvas
+        x = self.x + RECHEIO
+        y1 = self.y + AZULEJO_ALTURA - RECHEIO
+        y0 = y1 - ETIQUETA_ALTURA
+        for retangulo, rotulo, _ in self.chips:
+            largura = self._fontes["chip"].measure(c.itemcget(rotulo, "text")) + 2 * ETIQUETA_RECHEIO
+            c.coords(retangulo, x, y0, x + largura, y1)
+            c.coords(rotulo, x + ETIQUETA_RECHEIO, (y0 + y1) / 2)
+            x += largura + 4
+
+    def mostrar(self, sim):
+        """Esconde (ou mostra) o azulejo sem destruí-lo: é como a busca
+        filtra a página."""
+        if sim != self.visivel:
+            self.visivel = sim
+            self.canvas.itemconfigure(self.tag, state="normal" if sim else "hidden")
+
+    def contem(self, x, y):
+        """Se o ponto (em coordenadas do canvas) cai neste azulejo."""
+        return (self.visivel and self.x <= x < self.x + self.largura
+                and self.y <= y < self.y + AZULEJO_ALTURA)
+
+    # ---------- cores ----------
+
+    def realcar(self, sim):
+        if sim != self.realcado:
+            self.realcado = sim
+            self.pintar()
+
+    def pintar(self):
+        """As cores do tema de agora, com ou sem o realce do mouse."""
+        cores = self.aba.app.cores
+        c = self.canvas
+        c.itemconfigure(self.fundo,
+                        fill=cores["realce"] if self.realcado else cores["painel"],
+                        outline=cores["azul"] if self.realcado else cores["borda"])
+        c.itemconfigure(self.nome, fill=cores["texto"])
+        c.itemconfigure(self.detalhe, fill=cores["fraco"])
+        for retangulo, rotulo, forte in self.chips:
+            c.itemconfigure(retangulo, fill=cores["azul"] if forte else cores["neutro"])
+            c.itemconfigure(rotulo, fill=cores["botao_texto"] if forte else cores["fraco"])
 
     def destruir(self):
-        self.aba.canvas.delete(self.item)
-        self.frame.destroy()
+        self.canvas.delete(self.tag)
 
 
 # ============================================================
@@ -202,9 +269,10 @@ class AbaDoBanco(ttk.Frame):
         super().__init__(app.notebook, style=app.estilo("TFrame"))
         self.app = app
         self.banco = banco
-        self.azulejos = []
-        self._resumos = []          # o que a página mostra (já filtrado)
-        self._informacoes = {}      # amostra_id -> valores das categorias
+        self.azulejos = []          # os que estão na página, na ordem
+        self._por_id = {}           # amostra_id -> Azulejo (todos, até os escondidos)
+        self._pendentes = []        # (resumo, informações) ainda sem azulejo
+        self._visiveis = set()      # os ids que a busca deixa na página
         self._lote_job = None
         self._resize_job = None
         self._largura = 0
@@ -290,7 +358,14 @@ class AbaDoBanco(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         barra.pack(side="right", fill="y")
         self.canvas.bind("<Configure>", self._on_configure)
-        app.registrar_rolagem(self.pagina, self.canvas)
+        # os azulejos são desenhos, não widgets: quem está debaixo do
+        # mouse é conta de grade, e o clique é do canvas
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda _e: self._realcar(None))
+        self.canvas.bind("<Button-1>", self._on_click)
+        self._realcado = None
+        app.registrar_rolagem(self.pagina, self.canvas,
+                              lambda: self._realcar(None))
 
         self.vazio = ttk.Label(self.canvas, padding=24,
                                style=app.estilo("FracoFundo.TLabel"))
@@ -324,50 +399,87 @@ class AbaDoBanco(ttk.Frame):
     # ------------------------------------------------------------
 
     def recarregar(self):
-        """Relê o banco e refaz a página. É o que acontece depois de
-        qualquer coisa entrar ou sair do banco."""
+        """Relê o banco e acerta a página. É o que acontece depois de
+        qualquer coisa entrar ou sair do banco — e custa só o que mudou
+        (ver o cabeçalho)."""
         if self._lote_job is not None:
             self.after_cancel(self._lote_job)
             self._lote_job = None
-        for azulejo in self.azulejos:
-            azulejo.destruir()
-        self.azulejos = []
 
         busca = self.busca_var.get().strip()
         try:
-            self._resumos = self.banco.amostras(busca or None)
-            self._informacoes = self.banco.atributos_de_todas()
-            total_a, total_m = self.banco.total_de_amostras(), self.banco.total_de_medicoes()
+            todos = self.banco.amostras()
+            visiveis = ({a["id"] for a in self.banco.amostras(busca)}
+                        if busca else {a["id"] for a in todos})
+            informacoes = self.banco.atributos_de_todas()
+            total_m = self.banco.total_de_medicoes()
         except ErroDoBanco as erro:
             messagebox.showerror("Banco de amostras", str(erro))
             return
 
-        texto = "%d amostra(s) · %d medição(ões)" % (total_a, total_m)
+        texto = "%d amostra(s) · %d medição(ões)" % (len(todos), total_m)
         if busca:
-            texto = "%d de %s" % (len(self._resumos), texto)
+            texto = "%d de %s" % (len(visiveis), texto)
         self.status.config(text=texto)
 
-        if not self._resumos:
+        # quem sumiu do banco vai embora; quem já tem azulejo é
+        # atualizado (de graça, se nada mudou); quem é novo fica na
+        # fila pra nascer em lotes
+        vivos = {a["id"] for a in todos}
+        self._realcar(None)
+        for amostra_id in [i for i in self._por_id if i not in vivos]:
+            self._por_id.pop(amostra_id).destruir()
+        self.azulejos, self._pendentes = [], []
+        for resumo in todos:
+            azulejo = self._por_id.get(resumo["id"])
+            valores = informacoes.get(resumo["id"], [])
+            if azulejo is None:
+                self._pendentes.append((resumo, valores))
+                continue
+            azulejo.atualizar(resumo, valores)
+            azulejo.mostrar(resumo["id"] in visiveis)
+            if azulejo.visivel:
+                self.azulejos.append(azulejo)
+        self._visiveis = visiveis
+
+        if not visiveis:
             self.vazio.config(text=("Nenhuma amostra bate com a busca."
                                     if busca else
                                     "Banco vazio. Carregue amostras e o mapeamento na aba "
                                     "Catalogador e use \"Adicionar amostras da tela\", ou "
                                     "importe a planilha de informações."))
             self.canvas.itemconfigure(self._item_vazio, state="normal")
-            self.canvas.configure(scrollregion=(0, 0, 0, 0))
         else:
             self.canvas.itemconfigure(self._item_vazio, state="hidden")
         self._criar_lote()
 
     def _criar_lote(self):
+        """Faz nascer os próximos azulejos da fila e reposiciona a
+        página. A ordem na página é a do banco (por nome), então um
+        azulejo novo entra no lugar certo e não no fim."""
         self._lote_job = None
-        inicio = len(self.azulejos)
-        for resumo in self._resumos[inicio:inicio + AZULEJOS_POR_LOTE]:
-            self.azulejos.append(Azulejo(self, resumo,
-                                         self._informacoes.get(resumo["id"], [])))
+        for resumo, valores in self._pendentes[:AZULEJOS_POR_LOTE]:
+            azulejo = Azulejo(self, resumo, valores)
+            self._por_id[resumo["id"]] = azulejo
+            azulejo.mostrar(resumo["id"] in self._visiveis)
+        del self._pendentes[:AZULEJOS_POR_LOTE]
+        self._ordenar()
         self._dispor()
-        if len(self.azulejos) < len(self._resumos):
+        if self._pendentes:
             self._lote_job = self.after(1, self._criar_lote)
+
+    def _ordenar(self):
+        """Os azulejos visíveis, na ordem do banco. Só é refeita quando
+        alguém nasce ou morre."""
+        ordem = self._ordem_do_banco()
+        self.azulejos = sorted((a for a in self._por_id.values() if a.visivel),
+                               key=lambda a: ordem.get(a.amostra_id, 0))
+
+    def _ordem_do_banco(self):
+        """A posição de cada amostra na ordem por nome (a que
+        `banco.amostras()` devolve) — uma consulta leve, só ids."""
+        return {l[0]: i for i, l in enumerate(self.banco.con.execute(
+            "SELECT id FROM amostras ORDER BY nome COLLATE NOCASE"))}
 
     def _grade(self):
         """(quantas colunas cabem, a largura de cada azulejo): o azulejo
@@ -392,6 +504,41 @@ class AbaDoBanco(ttk.Frame):
         altura = MARGEM + linhas * (AZULEJO_ALTURA + ESPACO)
         self.canvas.configure(scrollregion=(0, 0, self.canvas.winfo_width(),
                                             max(altura, self.canvas.winfo_height())))
+
+    def _azulejo_em(self, evento):
+        """O azulejo debaixo do ponteiro, pela posição dele na grade —
+        duas divisões, sem perguntar nada ao Tk."""
+        if not self.azulejos:
+            return None
+        x = self.canvas.canvasx(evento.x) - MARGEM
+        y = self.canvas.canvasy(evento.y) - MARGEM
+        colunas, largura = self._grade()
+        coluna, linha = int(x // (largura + ESPACO)), int(y // (AZULEJO_ALTURA + ESPACO))
+        if x < 0 or y < 0 or coluna >= colunas:
+            return None
+        indice = linha * colunas + coluna
+        if indice >= len(self.azulejos):
+            return None
+        azulejo = self.azulejos[indice]
+        return azulejo if azulejo.contem(x + MARGEM, y + MARGEM) else None
+
+    def _realcar(self, azulejo):
+        if azulejo is self._realcado:
+            return
+        if self._realcado is not None:
+            self._realcado.realcar(False)
+        self._realcado = azulejo
+        if azulejo is not None:
+            azulejo.realcar(True)
+        self.canvas.configure(cursor="hand2" if azulejo is not None else "")
+
+    def _on_motion(self, evento):
+        self._realcar(self._azulejo_em(evento))
+
+    def _on_click(self, evento):
+        azulejo = self._azulejo_em(evento)
+        if azulejo is not None:
+            self.abrir_amostra(azulejo.amostra_id)
 
     def _on_configure(self, evento):
         if abs(evento.width - self._largura) <= 4:
@@ -802,6 +949,22 @@ class AbaDoBanco(ttk.Frame):
             return
 
         novas, atualizadas, sem_nome, erros = 0, 0, [], []
+        with self.banco.transacao():
+            novas, atualizadas = self._importar_blocos(caminhos, mapeamento, sem_nome, erros)
+
+        self.recarregar()
+        texto = "%d medição(ões) nova(s), %d atualizada(s)." % (novas, atualizadas)
+        if sem_nome:
+            texto += ("\n\nFicaram de fora, por não estarem no mapeamento: %s."
+                      % ", ".join(sem_nome))
+        if erros:
+            texto += "\n\nErros:\n" + "\n".join(erros)
+        messagebox.showinfo("Importação", texto)
+
+    def _importar_blocos(self, caminhos, mapeamento, sem_nome, erros):
+        """O miolo da importação, numa transação só (60 commits eram
+        60 escritas sincronizadas no disco). Devolve (novas, atualizadas)."""
+        novas, atualizadas = 0, 0
         for caminho in caminhos:
             try:
                 blocos = ler_tabela_exportada(caminho)
@@ -828,15 +991,7 @@ class AbaDoBanco(ttk.Frame):
                     continue
                 novas += nova
                 atualizadas += not nova
-
-        self.recarregar()
-        texto = "%d medição(ões) nova(s), %d atualizada(s)." % (novas, atualizadas)
-        if sem_nome:
-            texto += ("\n\nFicaram de fora, por não estarem no mapeamento: %s."
-                      % ", ".join(sem_nome))
-        if erros:
-            texto += "\n\nErros:\n" + "\n".join(erros)
-        messagebox.showinfo("Importação", texto)
+        return novas, atualizadas
 
     def importar_planilha(self):
         caminho = filedialog.askopenfilename(
@@ -891,6 +1046,8 @@ class AbaDoBanco(ttk.Frame):
         cores = self.app.cores
         self.canvas.configure(background=cores["fundo"])
         self.canvas_detalhe.configure(background=cores["fundo"])
+        for azulejo in self._por_id.values():
+            azulejo.pintar()
 
 
 # ============================================================

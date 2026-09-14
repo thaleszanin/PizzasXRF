@@ -61,6 +61,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
@@ -68,8 +69,8 @@ from ..nucleo.leitura import parse_xrf_file, parse_mapping
 from ..nucleo.planilha import parse_planilha
 from ..nucleo.fontes import CONCENTRACOES, FONTE_PADRAO, FONTES
 from ..nucleo.classificacao import TUBE_OPTIONS, apply_exclusions, classify
-from ..graficos.figura import (FIG_DPI, FIG_SIZE, build_sample_figure,
-                              passos_da_rasterizacao, passos_do_desenho)
+from ..graficos.figura import (ESPERA, FIG_DPI, FIG_SIZE, passos_da_rasterizacao,
+                              passos_do_desenho, passos_do_png, png_da_figura)
 from ..graficos.tipos import TIPO_PADRAO, TIPOS
 from ..graficos.tema import pintar
 from .tema import TEMA_PADRAO, outro, pintar_janela, preparar, trocar
@@ -78,8 +79,9 @@ from .dialogos import escolher
 from ..banco import (BancoDeAmostras, ErroDoBanco, bancos_lembrados,
                      lembrar_bancos, leituras_classificadas)
 from ..exportacao import (PilhaDeImagens, bloco_da_amostra, cabecalho_da_tabela,
-                          caminho_livre, documento_compilado, escrever_texto,
-                          linhas_da_tabela, nome_de_arquivo, pasta_da_exportacao)
+                          caminho_livre, documento_compilado, escrever_bytes,
+                          escrever_texto, linhas_da_tabela, nome_de_arquivo,
+                          pasta_da_exportacao)
 
 # Altura reservada pro gráfico dentro do cartão. É fixa de propósito: o
 # cartão ocupa o mesmo espaço antes e depois de ser desenhado, então a
@@ -111,6 +113,13 @@ TETO_DE_ESPERA_MS = 350
 # desenho de um cartão é fatiado em pedaços de uns 25 ms; a fila enfia
 # pedaços até estourar esse orçamento e devolve o controle ao Tk.
 ORCAMENTO_MS = 12
+# Quanto tempo um LOTE (exportar a batelada, guardar no banco) pode
+# segurar a janela de cada vez. Mais folgado que o desenho dos cartões:
+# aqui não há rolagem pra manter lisa, só a janela pra manter viva.
+ORCAMENTO_DO_LOTE_MS = 20
+# Quanto esperar pra olhar de novo quando o lote está à espera de outra
+# thread (a compressão de um png leva uns 60 ms).
+ESPERA_POR_THREAD_MS = 10
 # Quantos cartões nascem por vez ao carregar uma batelada. Criar 100 de
 # uma vez faz o Tk remontar o layout de tudo numa tacada só e a janela
 # congela; em lotes, a lista vai aparecendo e dá pra usar o programa.
@@ -475,14 +484,10 @@ class SampleCard:
         )
         if not path:
             return
-        # figura NOVA, no tamanho padrão: a imagem salva não pode depender
-        # da largura que a janela tinha na hora (a do cartão acompanha a
+        # imagem NOVA, no tamanho padrão: a salva não pode depender da
+        # largura que a janela tinha na hora (a do cartão acompanha a
         # janela). É exatamente a mesma que a exportação em lote gera.
-        fig = self.app.figura_para_arquivo(self.sample)
-        try:
-            fig.savefig(path, dpi=200, bbox_inches="tight")
-        finally:
-            fig.clear()
+        escrever_bytes(path, self.app.png_da_amostra(self.sample))
         messagebox.showinfo("Salvo", "Imagem salva em:\n%s" % path)
 
     def _ajustar_largura(self, largura_px):
@@ -566,11 +571,12 @@ class App(tk.Tk):
         self._passos = None           # desenho em andamento (gerador)
         self._card_em_desenho = None
         self._sync_job = None         # criação dos cartões em lotes
-        self._export = None           # exportação em lote em andamento
+        self._lote = None             # o lote em andamento (gerador)
+        self._lote_job = None         # o próximo pedaço dele
         self._resize_job = None       # redesenho depois de mudar a janela
         self._largura_anterior = 0
         self.abas_de_banco = []       # um AbaDoBanco por .db aberto
-        self._banco_job = None        # "adicionar ao banco" em andamento
+        self._aba_em_uso = None       # a aba que o lote está alimentando
         self._rolaveis = []           # (quadro, canvas, depois) que rolam com a roda
 
         # a janela é um caderno: a primeira aba é o catalogador, e cada
@@ -1216,13 +1222,13 @@ class App(tk.Tk):
         major, trace, total = classify(kept, self.threshold)
         return kept, removed, major, trace, total
 
-    def figura_para_arquivo(self, sample):
-        """A figura de uma amostra no tamanho padrão (14 polegadas), pra
-        imagem salva ficar sempre igual — a do cartão acompanha a largura
-        da janela, esta não."""
+    def png_da_amostra(self, sample):
+        """Os bytes do .png de uma amostra no tamanho padrão (14
+        polegadas), pra imagem salva ficar sempre igual — a do cartão
+        acompanha a largura da janela, esta não."""
         kept, _, major, trace, total = self._dados_da_amostra(sample)
-        return build_sample_figure(kept, major, trace, total,
-                                   self.display_name_for(sample), self.tipo)
+        return png_da_figura(kept, major, trace, total,
+                             self.display_name_for(sample), self.tipo)
 
     def bloco_de_texto(self, sample):
         """A tabela de uma amostra como texto — a mesma no botão do
@@ -1235,6 +1241,71 @@ class App(tk.Tk):
             [e["symbol"] for e in removed],
             self.fonte["grandeza"], self.unidade, self.fonte["formatar"])
 
+    # ---------- lotes: exportar a batelada, guardar no banco ----------
+    #
+    # As duas coisas fazem o mesmo trabalho caro — o gráfico de cada
+    # amostra — e antes faziam isso uma amostra por vez, com a janela
+    # parada uns 300 ms em cada. Agora cada lote é um GERADOR que cede
+    # o controle entre um pedaço e outro do desenho (os mesmos pedaços
+    # da fila dos cartões), e `_lote_step` vai puxando pedaços até
+    # estourar o orçamento de tempo e devolve a janela ao Tk. Dá pra
+    # rolar a lista e trocar de aba no meio de uma batelada de 100.
+
+    def _iniciar_lote(self, gerador, rotulo):
+        self._lote = gerador
+        for botao in self.export_buttons:
+            botao.state(["disabled"])
+        self.export_label.config(text=rotulo)
+        self._lote_job = self.after(1, self._lote_step)
+
+    def _lote_step(self):
+        self._lote_job = None
+        limite = time.monotonic() + ORCAMENTO_DO_LOTE_MS / 1000.0
+        espera = 1
+        try:
+            while True:
+                if next(self._lote) is ESPERA:
+                    # o lote está esperando outra thread (a compressão
+                    # do png): não adianta insistir agora
+                    espera = ESPERA_POR_THREAD_MS
+                    break
+                if time.monotonic() >= limite:
+                    break
+        except StopIteration:
+            self._terminar_lote()
+            return
+        except Exception as erro:
+            # um erro que o gerador não tratou: o lote acaba aqui, e a
+            # janela conta o que houve em vez de morrer em silêncio
+            self._terminar_lote()
+            messagebox.showerror("Erro", "O trabalho parou no meio:\n%s" % erro)
+            return
+        self._lote_job = self.after(espera, self._lote_step)
+
+    def _terminar_lote(self):
+        self._lote = None
+        self._aba_em_uso = None
+        self.export_label.config(text="")
+        for botao in self.export_buttons:
+            botao.state(["!disabled"])
+
+    def _passos_da_amostra(self, sample, nome, png=True):
+        """Os pedaços do gráfico de uma amostra. Devolve (bloco de
+        texto, bytes do png ou pixels da tela, figura) — a figura fica
+        viva até quem chamou terminar com ela."""
+        kept, removed, major, trace, total = self._dados_da_amostra(sample)
+        bloco = self.bloco_de_texto(sample)
+        fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
+        FigureCanvasAgg(fig)
+        if png:
+            imagem = yield from passos_do_png(fig, kept, major, trace, total,
+                                              nome, self.tipo)
+        else:
+            yield from passos_do_desenho(fig, kept, major, trace, total, nome, self.tipo)
+            yield from passos_da_rasterizacao(fig)
+            imagem = PilhaDeImagens.pixels(fig)
+        return bloco, imagem, fig
+
     def export_all(self, modo):
         """Salva a batelada inteira. O `modo` diz o quê:
 
@@ -1245,8 +1316,8 @@ class App(tk.Tk):
 
         Os nomes saem do mapeamento, quando ele está carregado.
         """
-        if self._export is not None:
-            return  # já tem uma exportação rodando
+        if self._lote is not None:
+            return  # já tem um lote rodando
         if not self.samples:
             messagebox.showinfo("Nada para salvar",
                                 "Carregue as amostras primeiro (botão 1).")
@@ -1275,104 +1346,54 @@ class App(tk.Tk):
                 messagebox.showerror("Erro ao salvar",
                                      "Não consegui criar a pasta:\n%s" % erro)
                 return
+        # a lista é congelada aqui: remover uma amostra no meio da
+        # exportação não pode bagunçar a numeração
+        self._iniciar_lote(self._lote_de_exportacao(pasta, list(self.samples), compilado),
+                           "Salvando\u2026")
 
-        self._export = {
-            "pasta": pasta,
-            # a lista é congelada aqui: remover uma amostra no meio da
-            # exportação não pode bagunçar a numeração
-            "amostras": list(self.samples),
-            "individuais": not compilado,
-            "compilado": compilado,
-            "indice": 0,
-            "blocos": [],
-            "pilha": PilhaDeImagens() if compilado else None,
-            "usados": set(),
-            "arquivos": [],
-        }
-        for botao in self.export_buttons:
-            botao.state(["disabled"])
-        self.export_label.config(text="Salvando\u2026")
-        self.after(1, self._export_step)
-
-    def _export_step(self):
-        """Salva UMA amostra e devolve o controle ao Tk.
-
-        Uma batelada grande leva alguns segundos (o gráfico é o caro), e
-        a janela não pode congelar enquanto isso."""
-        estado = self._export
-        if estado is None:
-            return
-        amostras = estado["amostras"]
-        indice = estado["indice"]
-        if indice >= len(amostras):
-            self._export_finish()
-            return
-
-        sample = amostras[indice]
-        nome = self.display_name_for(sample)
-        try:
-            kept, removed, major, trace, total = self._dados_da_amostra(sample)
-            bloco = bloco_da_amostra(
-                nome, sample["code"],
-                linhas_da_tabela(major, trace, total, self.fonte["formatar"]), total,
-                self.threshold, self.tube_var.get(), [e["symbol"] for e in removed],
-                self.fonte["grandeza"], self.unidade, self.fonte["formatar"])
-
-            fig = build_sample_figure(kept, major, trace, total, nome, self.tipo)
+    def _lote_de_exportacao(self, pasta, amostras, compilado):
+        blocos, arquivos, usados = [], [], set()
+        pilha = PilhaDeImagens() if compilado else None
+        for indice, sample in enumerate(amostras):
+            nome = self.display_name_for(sample)
             try:
-                if estado["individuais"]:
-                    base = self._nome_livre(nome, sample["code"], estado["usados"])
-                    estado["arquivos"].append(escrever_texto(
-                        caminho_livre(estado["pasta"], base, ".txt"), bloco))
-                    caminho = caminho_livre(estado["pasta"], base, ".png")
-                    fig.savefig(caminho, dpi=200, bbox_inches="tight")
-                    estado["arquivos"].append(caminho)
-                if estado["compilado"]:
-                    estado["blocos"].append(bloco)
-                    estado["pilha"].adicionar(fig)
-            finally:
+                bloco, imagem, fig = yield from self._passos_da_amostra(
+                    sample, nome, png=not compilado)
                 fig.clear()
-        except Exception as erro:
-            self._export_abort("a amostra %s" % nome, erro)
-            return
+                if compilado:
+                    blocos.append(bloco)
+                    pilha.adicionar_pixels(imagem)
+                else:
+                    base = self._nome_livre(nome, sample["code"], usados)
+                    arquivos.append(escrever_texto(
+                        caminho_livre(pasta, base, ".txt"), bloco))
+                    arquivos.append(escrever_bytes(
+                        caminho_livre(pasta, base, ".png"), imagem))
+            except Exception as erro:
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Parei na amostra %s:\n%s\n\n%d arquivo(s) já tinham sido salvos."
+                    % (nome, erro, len(arquivos)))
+                return
+            self.export_label.config(
+                text="Salvando\u2026 %d de %d" % (indice + 1, len(amostras)))
+            yield
 
-        estado["indice"] += 1
-        self.export_label.config(
-            text="Salvando\u2026 %d de %d" % (estado["indice"], len(amostras)))
-        self.after(1, self._export_step)
-
-    def _export_finish(self):
-        estado = self._export
-        try:
-            if estado["compilado"]:
-                texto = documento_compilado(estado["blocos"], self.threshold,
-                                            self.tube_var.get(), bool(self.name_mapping),
-                                            self._nome_da_fonte())
-                estado["arquivos"].append(escrever_texto(
-                    caminho_livre(estado["pasta"], "todas as amostras", ".txt"), texto))
-                estado["arquivos"].append(estado["pilha"].salvar(
-                    caminho_livre(estado["pasta"], "todas as amostras", ".png")))
-        except Exception as erro:
-            self._export_abort("o arquivo compilado", erro)
-            return
-
-        quantos, pasta = len(estado["arquivos"]), estado["pasta"]
-        self._export_end()
-        messagebox.showinfo("Pronto", "%d arquivo(s) salvo(s) em:\n%s" % (quantos, pasta))
-
-    def _export_abort(self, o_que, erro):
-        salvos = len(self._export["arquivos"])
-        self._export_end()
-        messagebox.showerror(
-            "Erro ao salvar",
-            "Parei em %s:\n%s\n\n%d arquivo(s) já tinham sido salvos."
-            % (o_que, erro, salvos))
-
-    def _export_end(self):
-        self._export = None
-        self.export_label.config(text="")
-        for botao in self.export_buttons:
-            botao.state(["!disabled"])
+        if compilado:
+            try:
+                texto = documento_compilado(blocos, self.threshold, self.tube_var.get(),
+                                            bool(self.name_mapping), self._nome_da_fonte())
+                arquivos.append(escrever_texto(
+                    caminho_livre(pasta, "todas as amostras", ".txt"), texto))
+                arquivos.append(pilha.salvar(
+                    caminho_livre(pasta, "todas as amostras", ".png")))
+            except Exception as erro:
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Parei no arquivo compilado:\n%s\n\n%d arquivo(s) já tinham "
+                    "sido salvos." % (erro, len(arquivos)))
+                return
+        messagebox.showinfo("Pronto", "%d arquivo(s) salvo(s) em:\n%s" % (len(arquivos), pasta))
 
     @staticmethod
     def _nome_livre(nome, codigo, usados):
@@ -1447,7 +1468,7 @@ class App(tk.Tk):
                 messagebox.showerror("Abrir banco", str(erro))
 
     def fechar_banco(self, aba):
-        if self._banco_job is not None and self._banco_job["aba"] is aba:
+        if aba is self._aba_em_uso:
             messagebox.showinfo("Banco em uso",
                                 "Espere terminar de adicionar as amostras.")
             return
@@ -1476,7 +1497,7 @@ class App(tk.Tk):
         do arquivo (081025af), e é pelo nome que a planilha e as medições
         dos outros tubos se encontram.
         """
-        if self._banco_job is not None or self._export is not None:
+        if self._lote is not None:
             return
         if not self.samples:
             messagebox.showinfo("Nada para guardar",
@@ -1525,65 +1546,46 @@ class App(tk.Tk):
                                 "Nenhuma amostra da tela está no mapeamento.")
             return
 
-        self._banco_job = {"aba": aba, "amostras": amostras, "indice": 0,
-                           "novas": 0, "atualizadas": 0, "erros": []}
-        for botao in self.export_buttons:
-            botao.state(["disabled"])
-        self.export_label.config(text="Guardando no banco\u2026")
-        self.after(1, self._banco_step)
+        self._aba_em_uso = aba
+        self._iniciar_lote(self._lote_do_banco(aba, amostras), "Guardando no banco\u2026")
 
-    def _banco_step(self):
-        """Guarda UMA amostra e devolve o controle ao Tk — o gráfico é o
-        caro, como na exportação."""
-        estado = self._banco_job
-        if estado is None:
-            return
-        amostras, indice = estado["amostras"], estado["indice"]
-        if indice >= len(amostras):
-            self._banco_finish()
-            return
-
-        sample = amostras[indice]
-        banco = estado["aba"].banco
-        nome = self.display_name_for(sample)
-        try:
-            kept, removed, major, trace, total = self._dados_da_amostra(sample)
-            bloco = self.bloco_de_texto(sample)
-            fig = build_sample_figure(kept, major, trace, total, nome, self.tipo)
+    def _lote_do_banco(self, aba, amostras):
+        """Guarda as amostras uma a uma, em pedaços (ver `_iniciar_lote`).
+        Cada medição entra no banco assim que fica pronta; o que dá
+        erro é anotado e a batelada segue."""
+        banco = aba.banco
+        novas, atualizadas, erros, ids = 0, 0, [], set()
+        for indice, sample in enumerate(amostras):
+            nome = self.display_name_for(sample)
             try:
-                imagem = io.BytesIO()
-                fig.savefig(imagem, format="png", dpi=200, bbox_inches="tight")
-            finally:
+                kept, removed, major, trace, _ = self._dados_da_amostra(sample)
+                bloco, imagem, fig = yield from self._passos_da_amostra(sample, nome)
                 fig.clear()
-            amostra_id, _ = banco.obter_ou_criar_amostra(nome)
-            _, nova = banco.guardar_medicao(
-                amostra_id, self.tube_var.get(), sample["code"],
-                leituras_classificadas(kept, removed, major, trace), self.threshold,
-                tabela=bloco, imagem=imagem.getvalue(),
-                grandeza=self.fonte["grandeza"], unidade=self.unidade,
-                tipo_grafico=self.tipo, descartados=[e["symbol"] for e in removed])
-            estado["novas" if nova else "atualizadas"] += 1
-        except Exception as erro:
-            estado["erros"].append("%s: %s" % (nome, erro))
+                amostra_id, _ = banco.obter_ou_criar_amostra(nome)
+                _, nova = banco.guardar_medicao(
+                    amostra_id, self.tube_var.get(), sample["code"],
+                    leituras_classificadas(kept, removed, major, trace), self.threshold,
+                    tabela=bloco, imagem=imagem,
+                    grandeza=self.fonte["grandeza"], unidade=self.unidade,
+                    tipo_grafico=self.tipo, descartados=[e["symbol"] for e in removed])
+                ids.add(amostra_id)
+                if nova:
+                    novas += 1
+                else:
+                    atualizadas += 1
+            except Exception as erro:
+                erros.append("%s: %s" % (nome, erro))
+            self.export_label.config(
+                text="Guardando no banco\u2026 %d de %d" % (indice + 1, len(amostras)))
+            yield
 
-        estado["indice"] += 1
-        self.export_label.config(
-            text="Guardando no banco\u2026 %d de %d" % (estado["indice"], len(amostras)))
-        self.after(1, self._banco_step)
-
-    def _banco_finish(self):
-        estado, self._banco_job = self._banco_job, None
-        self.export_label.config(text="")
-        for botao in self.export_buttons:
-            botao.state(["!disabled"])
-        aba = estado["aba"]
         if aba in self.abas_de_banco:
             aba.recarregar()
             self.notebook.select(aba)
         texto = ("%d medição(ões) nova(s) e %d atualizada(s) em \"%s\"."
-                 % (estado["novas"], estado["atualizadas"], aba.banco.nome))
-        if estado["erros"]:
-            texto += "\n\nNão entraram:\n" + "\n".join(estado["erros"])
+                 % (novas, atualizadas, banco.nome))
+        if erros:
+            texto += "\n\nNão entraram:\n" + "\n".join(erros)
             messagebox.showwarning("Banco de amostras", texto)
         else:
             messagebox.showinfo("Banco de amostras", texto)
