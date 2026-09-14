@@ -232,6 +232,20 @@ def png_da_figura(elements, major, trace, total, title, tipo=TIPO_PADRAO, dpi=PN
         fig.clear()
 
 
+def pixels_da_figura(elements, major, trace, total, title, tipo=TIPO_PADRAO):
+    """Os pixels RGB da figura de uma amostra no tamanho da tela — a
+    faixa que a imagem compilada empilha. Sem o canal alfa: o fundo já
+    é branco e assim a faixa ocupa 3/4 da memória."""
+    fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
+    FigureCanvasAgg(fig)
+    try:
+        draw_sample_figure(fig, elements, major, trace, total, title, tipo)
+        fig.canvas.draw()
+        return np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    finally:
+        fig.clear()
+
+
 def _uniao(limites):
     """O menor eixo que contém todos os eixos recebidos."""
     return (min(l[0] for l in limites), max(l[1] for l in limites),

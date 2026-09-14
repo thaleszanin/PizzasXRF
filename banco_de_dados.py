@@ -79,6 +79,8 @@ pacote `bancodedados/`, dividido por seção:
       tipos.py              a LISTA de tipos de gráfico disponíveis
       figura.py             os três gráficos de uma amostra, lado a lado
       tema.py               repinta a figura da TELA no modo claro/escuro
+      paralelo.py           a oficina: os gráficos de uma batelada em
+                            vários processos (exportar, guardar no banco)
 
     exportacao.py  <- o CONTEÚDO DOS ARQUIVOS salvos (.txt e .png
                       compilado), sem saber onde eles vão parar

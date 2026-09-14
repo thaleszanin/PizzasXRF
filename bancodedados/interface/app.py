@@ -72,6 +72,7 @@ from ..nucleo.classificacao import TUBE_OPTIONS, apply_exclusions, classify
 from ..graficos.figura import (ESPERA, FIG_DPI, FIG_SIZE, passos_da_rasterizacao,
                               passos_do_desenho, passos_do_png, png_da_figura)
 from ..graficos.tipos import TIPO_PADRAO, TIPOS
+from ..graficos.paralelo import OficinaDeGraficos
 from ..graficos.tema import pintar
 from .tema import TEMA_PADRAO, outro, pintar_janela, preparar, trocar
 from .banco_view import AbaDoBanco
@@ -573,6 +574,7 @@ class App(tk.Tk):
         self._sync_job = None         # criação dos cartões em lotes
         self._lote = None             # o lote em andamento (gerador)
         self._lote_job = None         # o próximo pedaço dele
+        self.oficina = OficinaDeGraficos()  # os gráficos dos lotes, em paralelo
         self._resize_job = None       # redesenho depois de mudar a janela
         self._largura_anterior = 0
         self.abas_de_banco = []       # um AbaDoBanco por .db aberto
@@ -623,6 +625,7 @@ class App(tk.Tk):
                 pass
         for aba in self.abas_de_banco:
             aba.banco.fechar()
+        self.oficina.fechar()
         super().destroy()
 
     def _build_top_controls(self):
@@ -979,6 +982,9 @@ class App(tk.Tk):
         # só os cartões novos são criados; os que já estavam na tela
         # continuam de pé, com o gráfico deles intacto
         self._sync_cards()
+        # com amostras na tela, uma exportação ou um "adicionar ao
+        # banco" vem aí: os processos da oficina já podem ir nascendo
+        self.oficina.aquecer()
 
     def _load_planilha(self):
         """Uma planilha só, com a batelada inteira dentro.
@@ -1007,6 +1013,7 @@ class App(tk.Tk):
         self.unidade = unidade
         self.samples.extend(amostras)
         self._sync_cards()
+        self.oficina.aquecer()
 
         aviso = "%d amostra(s) lida(s) de %s." % (len(amostras),
                                                   os.path.basename(path))
@@ -1244,12 +1251,19 @@ class App(tk.Tk):
     # ---------- lotes: exportar a batelada, guardar no banco ----------
     #
     # As duas coisas fazem o mesmo trabalho caro — o gráfico de cada
-    # amostra — e antes faziam isso uma amostra por vez, com a janela
-    # parada uns 300 ms em cada. Agora cada lote é um GERADOR que cede
-    # o controle entre um pedaço e outro do desenho (os mesmos pedaços
-    # da fila dos cartões), e `_lote_step` vai puxando pedaços até
-    # estourar o orçamento de tempo e devolve a janela ao Tk. Dá pra
-    # rolar a lista e trocar de aba no meio de uma batelada de 100.
+    # amostra, uns 300 ms de processador — e antes faziam isso uma
+    # amostra por vez, com a janela parada em cada. Agora:
+    #
+    #   * os gráficos da batelada inteira vão de uma vez pra OFICINA
+    #     (`graficos/paralelo.py`), que os desenha em vários processos:
+    #     60 amostras levam uns 3 s em oito núcleos, não 18;
+    #   * cada lote é um GERADOR que cede o controle enquanto espera a
+    #     oficina — e, se ela não estiver disponível, desenha aqui mesmo
+    #     nos pedaços da fila dos cartões. `_lote_step` puxa pedaços até
+    #     estourar o orçamento de tempo e devolve a janela ao Tk.
+    #
+    # Nos dois casos dá pra rolar a lista e trocar de aba no meio de uma
+    # batelada de 100.
 
     def _iniciar_lote(self, gerador, rotulo):
         self._lote = gerador
@@ -1289,22 +1303,44 @@ class App(tk.Tk):
         for botao in self.export_buttons:
             botao.state(["!disabled"])
 
-    def _passos_da_amostra(self, sample, nome, png=True):
-        """Os pedaços do gráfico de uma amostra. Devolve (bloco de
-        texto, bytes do png ou pixels da tela, figura) — a figura fica
-        viva até quem chamou terminar com ela."""
-        kept, removed, major, trace, total = self._dados_da_amostra(sample)
-        bloco = self.bloco_de_texto(sample)
+    def _encomendar(self, amostras, png=True):
+        """Manda os gráficos da batelada inteira pra oficina de uma vez,
+        pra todos os processos trabalharem desde já. Devolve um Future
+        por amostra — ou None no lugar de quem a oficina não aceitou,
+        e aí `_imagem_da_amostra` desenha aqui mesmo."""
+        futuros = []
+        for sample in amostras:
+            kept, _, major, trace, total = self._dados_da_amostra(sample)
+            pedir = self.oficina.pedir_png if png else self.oficina.pedir_pixels
+            futuros.append(pedir(kept, major, trace, total,
+                                 self.display_name_for(sample), self.tipo))
+        return futuros
+
+    def _imagem_da_amostra(self, sample, nome, futuro, png=True):
+        """O gráfico de uma amostra — os bytes do png ou os pixels da
+        tela —, em pedaços. Espera a oficina se ela ficou com o pedido;
+        senão (ou se o processo dela morreu no meio) desenha aqui, nos
+        mesmos pedaços da fila dos cartões."""
+        if futuro is not None:
+            while not futuro.done():
+                yield ESPERA
+            try:
+                return futuro.result()
+            except Exception:
+                self.oficina.disponivel = False  # o resto sai daqui mesmo
+
+        kept, _, major, trace, total = self._dados_da_amostra(sample)
         fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
         FigureCanvasAgg(fig)
-        if png:
-            imagem = yield from passos_do_png(fig, kept, major, trace, total,
-                                              nome, self.tipo)
-        else:
+        try:
+            if png:
+                return (yield from passos_do_png(fig, kept, major, trace, total,
+                                                 nome, self.tipo))
             yield from passos_do_desenho(fig, kept, major, trace, total, nome, self.tipo)
             yield from passos_da_rasterizacao(fig)
-            imagem = PilhaDeImagens.pixels(fig)
-        return bloco, imagem, fig
+            return PilhaDeImagens.pixels(fig)
+        finally:
+            fig.clear()
 
     def export_all(self, modo):
         """Salva a batelada inteira. O `modo` diz o quê:
@@ -1354,12 +1390,13 @@ class App(tk.Tk):
     def _lote_de_exportacao(self, pasta, amostras, compilado):
         blocos, arquivos, usados = [], [], set()
         pilha = PilhaDeImagens() if compilado else None
+        futuros = self._encomendar(amostras, png=not compilado)
         for indice, sample in enumerate(amostras):
             nome = self.display_name_for(sample)
             try:
-                bloco, imagem, fig = yield from self._passos_da_amostra(
-                    sample, nome, png=not compilado)
-                fig.clear()
+                bloco = self.bloco_de_texto(sample)
+                imagem = yield from self._imagem_da_amostra(
+                    sample, nome, futuros[indice], png=not compilado)
                 if compilado:
                     blocos.append(bloco)
                     pilha.adicionar_pixels(imagem)
@@ -1555,12 +1592,13 @@ class App(tk.Tk):
         erro é anotado e a batelada segue."""
         banco = aba.banco
         novas, atualizadas, erros, ids = 0, 0, [], set()
+        futuros = self._encomendar(amostras)
         for indice, sample in enumerate(amostras):
             nome = self.display_name_for(sample)
             try:
                 kept, removed, major, trace, _ = self._dados_da_amostra(sample)
-                bloco, imagem, fig = yield from self._passos_da_amostra(sample, nome)
-                fig.clear()
+                bloco = self.bloco_de_texto(sample)
+                imagem = yield from self._imagem_da_amostra(sample, nome, futuros[indice])
                 amostra_id, _ = banco.obter_ou_criar_amostra(nome)
                 _, nova = banco.guardar_medicao(
                     amostra_id, self.tube_var.get(), sample["code"],

@@ -10,7 +10,7 @@ from .tipos import TIPO_PADRAO, TIPOS, desenhador
 from .tema import pintar
 from .figura import (ESPERA, PNG_DPI, build_sample_figure, draw_sample_figure, paineis,
                      passos_da_rasterizacao, passos_do_desenho, passos_do_png,
-                     png_da_figura)
+                     pixels_da_figura, png_da_figura)
 
 __all__ = [
     "PALETTE",
@@ -37,6 +37,7 @@ __all__ = [
     "passos_da_rasterizacao",
     "passos_do_png",
     "png_da_figura",
+    "pixels_da_figura",
     "PNG_DPI",
     "ESPERA",
 ]
