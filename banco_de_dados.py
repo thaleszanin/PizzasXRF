@@ -40,10 +40,12 @@ O que esse programa faz:
          medições dos três tubos (Ag, Rh, Au) se juntam;
        - "Importar .txt/.png exportados" lê de volta os arquivos que o
          programa já salvou;
-       - "Importar planilha (.xlsx)" traz as informações de cada
-         amostra (primeira linha: as categorias; uma coluna: o nome da
-         amostra). As categorias são do banco, e dá pra criar, renomear
-         e apagar — e editar os valores amostra por amostra;
+       - "Importar lista de amostras (.xlsx)" traz as informações de
+         cada amostra (primeira linha: as categorias; uma coluna: o nome
+         da amostra). As categorias são do banco, e dá pra criar,
+         renomear e apagar — e editar os valores amostra por amostra;
+       - "Importar outro banco (.db)" junta a este banco o conteúdo de
+         outro arquivo .db, sem duplicar o que já está aqui;
        - a página mostra um azulejo por amostra; clicar abre a amostra
          inteira (informações, foto, cada medição com gráfico e tabela);
        - "Salvar cópia (.db)" baixa o banco num arquivo, e "Exportar
@@ -97,6 +99,7 @@ pacote `bancodedados/`, dividido por seção:
       app.py                botões, slider, cards e tabelas; as abas
       banco_view.py         a aba de um banco: azulejos e a amostra aberta
       dialogos.py           as janelinhas de pergunta, com o tema
+      dicas.py              o balão de dica que aparece sobre os botões
 
 A dependência anda sempre num sentido só — interface -> exportacao ->
 graficos -> nucleo, e interface -> banco -> nucleo — então dá pra usar

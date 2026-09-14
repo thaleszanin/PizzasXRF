@@ -77,6 +77,7 @@ from ..graficos.tema import pintar
 from .tema import TEMA_PADRAO, outro, pintar_janela, preparar, trocar
 from .banco_view import AbaDoBanco
 from .dialogos import escolher
+from .dicas import Dicas
 from ..banco import (BancoDeAmostras, ErroDoBanco, bancos_lembrados,
                      lembrar_bancos, leituras_classificadas)
 from ..exportacao import (PilhaDeImagens, bloco_da_amostra, cabecalho_da_tabela,
@@ -208,20 +209,31 @@ class SampleCard:
             style=app.estilo("Cartao.Neutro.TButton"),
             text=SETA_FECHADO if self.collapsed else SETA_ABERTO)
         self.toggle_btn.pack(side="left", padx=(0, 6))
+        app.dicas.registrar(self.toggle_btn, "Minimiza o cartão, deixando só esta "
+                            "linha — ou expande de volta.")
         self.name_label = ttk.Label(header, text=self.display_name,
                                     style=app.estilo("Titulo.TLabel"))
         self.name_label.pack(side="left")
         ttk.Label(header, text=f"   arquivo: {sample['code']}",
                   style=app.estilo("Fraco.TLabel")).pack(side="left")
-        ttk.Button(header, text="Remover",
-                   style=app.estilo("Cartao.Neutro.TButton"),
-                   command=lambda: app.remove_sample(self)).pack(side="right")
-        ttk.Button(header, text="Salvar tabela (TXT)",
-                   style=app.estilo("Cartao.TButton"),
-                   command=self.save_table).pack(side="right", padx=6)
-        ttk.Button(header, text="Salvar imagem (PNG)",
-                   style=app.estilo("Cartao.TButton"),
-                   command=self.save_figure).pack(side="right")
+        dica = app.dicas.registrar
+        dica(ttk.Button(header, text="Remover",
+                        style=app.estilo("Cartao.Neutro.TButton"),
+                        command=lambda: app.remove_sample(self)),
+             "Tira esta amostra da tela (o arquivo não é apagado)."
+             ).pack(side="right")
+        dica(ttk.Button(header, text="Salvar tabela (TXT)",
+                        style=app.estilo("Cartao.TButton"),
+                        command=self.save_table),
+             "Salva a tabela desta amostra num .txt: elemento, valor, % do "
+             "total e grupo, com o tubo e o limite usados no cabeçalho."
+             ).pack(side="right", padx=6)
+        dica(ttk.Button(header, text="Salvar imagem (PNG)",
+                        style=app.estilo("Cartao.TButton"),
+                        command=self.save_figure),
+             "Salva os três gráficos desta amostra num .png, no tamanho "
+             "padrão (não depende da largura da janela)."
+             ).pack(side="right")
 
         # o espaço do gráfico já nasce do tamanho exato da figura: assim o
         # cartão não muda de tamanho quando o gráfico aparece, e o widget
@@ -577,6 +589,7 @@ class App(tk.Tk):
         self.oficina = OficinaDeGraficos()  # os gráficos dos lotes, em paralelo
         self._resize_job = None       # redesenho depois de mudar a janela
         self._largura_anterior = 0
+        self.dicas = Dicas(self)      # o balão que explica cada botão
         self.abas_de_banco = []       # um AbaDoBanco por .db aberto
         self._aba_em_uso = None       # a aba que o lote está alimentando
         self._rolaveis = []           # (quadro, canvas, depois) que rolam com a roda
@@ -656,9 +669,16 @@ class App(tk.Tk):
                                    style=self.estilo("TButton"),
                                    command=self.load_samples)
         self.load_btn.pack(side="left")
-        ttk.Button(linha0, text="2. Carregar mapeamento (.csv/.txt)",
-                   style=self.estilo("TButton"),
-                   command=self.load_mapping).pack(side="left", padx=6)
+        dica = self.dicas.registrar
+        dica(self.load_btn, "Carrega as amostras: os .txt do XRF (um por amostra) "
+             "ou a planilha de concentrações, conforme a fonte escolhida acima. "
+             "Pode carregar mais de uma vez — os novos entram no fim da lista.")
+        dica(ttk.Button(linha0, text="2. Carregar mapeamento (.csv/.txt)",
+                        style=self.estilo("TButton"), command=self.load_mapping),
+             "Carrega o arquivo \"código do arquivo, nome real\" (uma linha por "
+             "amostra). Os cartões passam a mostrar o nome real, e é por ele "
+             "que a amostra entra no banco."
+             ).pack(side="left", padx=6)
         self.mapping_label = ttk.Label(linha0, text="Nenhum mapeamento carregado.",
                                        style=self.estilo("FracoFundo.TLabel"))
         self.mapping_label.pack(side="left", padx=(6, 0))
@@ -668,11 +688,19 @@ class App(tk.Tk):
                                    text="Modo %s" % outro(self.tema).lower(),
                                    command=self.on_tema_change)
         self.tema_btn.pack(side="right")
+        dica(self.tema_btn, "Alterna entre o modo escuro e o claro. Os arquivos "
+             "salvos saem sempre com fundo branco.")
         # os bancos: cada um abre numa aba própria
-        ttk.Button(linha0, text="Abrir banco (.db)…", style=self.estilo("Neutro.TButton"),
-                   command=self.abrir_banco).pack(side="right", padx=(0, 12))
-        ttk.Button(linha0, text="Novo banco…", style=self.estilo("Neutro.TButton"),
-                   command=self.novo_banco).pack(side="right", padx=(0, 4))
+        dica(ttk.Button(linha0, text="Abrir banco (.db)…", style=self.estilo("Neutro.TButton"),
+                        command=self.abrir_banco),
+             "Abre um ou mais bancos de amostras (.db), cada um numa aba própria. "
+             "Para juntar um .db ao banco que já está aberto, use \"Importar "
+             "outro banco\" na aba dele."
+             ).pack(side="right", padx=(0, 12))
+        dica(ttk.Button(linha0, text="Novo banco…", style=self.estilo("Neutro.TButton"),
+                        command=self.novo_banco),
+             "Cria um banco de amostras vazio (um arquivo .db) e abre a aba dele."
+             ).pack(side="right", padx=(0, 4))
 
         ttk.Label(frame, text="Tubo de raios X utilizado:", style=self.estilo("Secao.TLabel")).grid(row=2, column=0, sticky="w", pady=(12, 0))
         linha1 = ttk.Frame(frame, style=self.estilo("TFrame"))
@@ -732,6 +760,9 @@ class App(tk.Tk):
                                          style=self.estilo("Neutro.TButton"),
                                          command=self.toggle_all)
         self.toggle_all_btn.pack(side="left")
+        dica = self.dicas.registrar
+        dica(self.toggle_all_btn, "Minimiza (ou expande) todos os cartões de uma vez. "
+             "Minimizados, a lista fica leve de rolar.")
 
         ttk.Label(frame, text="Salvar todas as amostras:",
                   style=self.estilo("Secao.TLabel")).pack(side="left", padx=(24, 6))
@@ -745,6 +776,10 @@ class App(tk.Tk):
         ]
         for botao in self.export_buttons:
             botao.pack(side="left", padx=3)
+        dica(self.export_buttons[0], "Salva a batelada inteira em DOIS arquivos: um "
+             ".txt com todas as tabelas e um .png com todos os gráficos empilhados.")
+        dica(self.export_buttons[1], "Salva um .txt e um .png para CADA amostra, "
+             "dentro de uma pasta nova criada na hora.")
         # o mesmo .txt e o mesmo .png de cada amostra, só que guardados
         # num banco em vez de numa pasta
         self.export_buttons.append(
@@ -752,6 +787,10 @@ class App(tk.Tk):
                        style=self.estilo("TButton"),
                        command=lambda: self.adicionar_ao_banco()))
         self.export_buttons[-1].pack(side="left", padx=(18, 3))
+        dica(self.export_buttons[-1], "Guarda as amostras da tela num banco aberto: "
+             "para cada uma, a mesma tabela e o mesmo gráfico da exportação, com o "
+             "tubo e o limite de agora. Precisa do mapeamento carregado — é ele "
+             "que dá o nome da amostra.")
 
         self.export_label = ttk.Label(frame, text="",
                                       style=self.estilo("FracoFundo.TLabel"))
@@ -760,9 +799,10 @@ class App(tk.Tk):
         # Sozinho no canto direito, do outro lado da faixa: é o único
         # botão daqui que faz perder trabalho, e encostado nos outros
         # era clique errado esperando pra acontecer.
-        ttk.Button(frame, text="Remover todas",
-                   style=self.estilo("Perigo.TButton"),
-                   command=self.remove_all).pack(side="right")
+        dica(ttk.Button(frame, text="Remover todas",
+                        style=self.estilo("Perigo.TButton"), command=self.remove_all),
+             "Esvazia a lista (pergunta antes). Os arquivos não são apagados."
+             ).pack(side="right")
 
     def _build_scroll_area(self):
         """Cria a área rolável, já que podemos ter muitas amostras
@@ -938,6 +978,7 @@ class App(tk.Tk):
         área rolável e o Tk (no Windows) manda a roda pra quem tem o
         foco, não pra quem está debaixo do mouse.
         """
+        self.dicas.esconder()
         try:
             widget = self.winfo_containing(event.x_root, event.y_root)
         except (tk.TclError, KeyError):

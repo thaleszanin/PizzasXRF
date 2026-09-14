@@ -114,7 +114,12 @@ bancos abertos voltam sozinhos da próxima vez.
 * **"Importar .txt/.png exportados…"**: lê de volta os arquivos que o
   próprio programa salvou (o `.png` de mesmo nome entra junto). Também
   precisa do mapeamento.
-* **"Importar planilha (.xlsx)…"**: as informações de cada amostra. A
+* **"Importar outro banco (.db)…"**: junta a este banco tudo o que há em
+  outro arquivo `.db` — amostras, informações, fotos e medições. O que
+  já está preenchido aqui não é sobrescrito; as medições repetidas são
+  atualizadas, não duplicadas. (Para abrir um `.db` numa aba própria, o
+  botão é "Abrir banco (.db)…", na aba Catalogador.)
+* **"Importar lista de amostras (.xlsx)…"**: as informações de cada amostra. A
   regra de forma é uma só — **a primeira linha traz os nomes das
   categorias e uma das colunas traz o nome da amostra** (o mesmo nome
   do mapeamento). O programa sugere a coluna que mais bate com os nomes
@@ -130,6 +135,8 @@ bancos abertos voltam sozinhos da próxima vez.
   a foto (opcional) e cada medição com o gráfico e a tabela;
 * **"Categorias…"** cria, renomeia, reordena e apaga categorias — vale
   para o banco inteiro;
+* todo botão tem uma dica: deixe o mouse parado em cima dele que aparece
+  uma linha explicando o que ele faz;
 * **"Salvar cópia (.db)…"** baixa o banco num arquivo (o `.db` aberto já
   é gravado a cada mudança; a cópia é para levar, mandar ou guardar);
 * **"Exportar JSON…"** gera o `.json` do catálogo e, ao lado dele, a

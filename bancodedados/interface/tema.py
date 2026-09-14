@@ -46,6 +46,7 @@ Os papéis (o nome do estilo sem o tema na frente):
                                   texto normal e título de seção, dentro
                                   do cartão
     Chip.TLabel                   a etiqueta do tubo de uma medição
+    Dica.TLabel                   o balão de dica que aparece sobre os botões
 
 Os azulejos da página do banco não passam por estilo: são desenhos no
 canvas, pintados com as cores de `TEMAS` (inclusive "realce", a cor do
@@ -244,6 +245,9 @@ def _estilos_do_tema(root, style, tema):
     style.configure(E("Chip.TLabel"), background=cores["azul"],
                     foreground=cores["botao_texto"], font=(FONTE, 8, "bold"),
                     padding=(6, 1))
+    # o balão de dica dos botões (interface/dicas.py)
+    style.configure(E("Dica.TLabel"), background=cores["neutro"],
+                    foreground=cores["texto"])
 
     style.configure(E("TEntry"), fieldbackground=cores["campo"],
                     foreground=cores["corpo"], insertcolor=cores["corpo"],

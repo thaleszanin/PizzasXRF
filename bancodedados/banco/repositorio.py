@@ -534,6 +534,55 @@ class BancoDeAmostras:
         return atualizadas, criadas, ignoradas
 
     # ============================================================
+    # Outro banco inteiro
+    # ============================================================
+
+    def importar_banco(self, outro):
+        """Junta a este banco tudo o que há em `outro` (um
+        BancoDeAmostras aberto): categorias, amostras, informações,
+        fotos e medições — numa transação só.
+
+        As amostras se encontram pelo nome, as categorias pelo nome, e
+        as medições pela impressão/arquivo, como sempre. O que já está
+        escrito AQUI não é sobrescrito: uma informação do outro banco
+        só entra onde a nossa está vazia, e a foto só se não houver.
+        As medições, sim, são atualizadas se já existirem — vale o que
+        veio por último, como no "adicionar da tela".
+
+        Devolve um dicionário com as contagens.
+        """
+        if outro.caminho == self.caminho:
+            raise ErroDoBanco("Esse é o próprio banco aberto.")
+        contagem = {"categorias": 0, "amostras_novas": 0, "amostras_existentes": 0,
+                    "medicoes_novas": 0, "medicoes_atualizadas": 0, "fotos": 0}
+        with self.transacao():
+            categorias = {}
+            for categoria in outro.categorias():
+                antes = self.categoria_por_nome(categoria["nome"])
+                categorias[categoria["id"]] = self.criar_categoria(categoria["nome"])
+                contagem["categorias"] += antes is None
+            for resumo in outro.amostras():
+                amostra_id, criada = self.obter_ou_criar_amostra(resumo["nome"])
+                contagem["amostras_novas" if criada else "amostras_existentes"] += 1
+                minhas = self.atributos(amostra_id)
+                for cid, valor in outro.atributos(resumo["id"]).items():
+                    if valor and not minhas.get(categorias[cid]):
+                        self._definir_atributo(amostra_id, categorias[cid], valor)
+                if resumo["tem_foto"] and self.foto(amostra_id) is None:
+                    self.definir_foto(amostra_id, outro.foto(resumo["id"]))
+                    contagem["fotos"] += 1
+                for m in outro.medicoes(resumo["id"]):
+                    leituras = [(l["z"], l["valor"], l["grupo"])
+                                for l in outro.leituras(m["id"])]
+                    _, nova = self.guardar_medicao(
+                        amostra_id, m["tubo"], m["codigo"], leituras, m["limite"],
+                        tabela=m["tabela"], imagem=outro.imagem_da_medicao(m["id"]),
+                        grandeza=m["grandeza"], unidade=m["unidade"],
+                        tipo_grafico=m["tipo_grafico"], descartados=m["descartados"])
+                    contagem["medicoes_novas" if nova else "medicoes_atualizadas"] += 1
+        return contagem
+
+    # ============================================================
     # Medições
     # ============================================================
 

@@ -23,8 +23,9 @@ O que entra no banco
     que tem os dados; esta aba só recebe o resultado;
   * "Importar .txt/.png exportados": os arquivos que o próprio programa
     salvou — o .txt é lido de volta e o .png de mesmo nome entra junto;
-  * "Importar planilha": as informações de cada amostra, uma coluna por
-    categoria.
+  * "Importar lista de amostras": a planilha com as informações de cada
+    amostra, uma coluna por categoria;
+  * "Importar outro banco": o conteúdo de outro .db, juntado a este.
 
 Nos dois primeiros casos o MAPEAMENTO precisa estar carregado no
 catalogador: é ele que diz o nome da amostra a partir do código do
@@ -54,7 +55,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter import font as tkfont
 
-from ..banco import (ErroDoBanco, coluna_sugerida,
+from ..banco import (BancoDeAmostras, ErroDoBanco, coluna_sugerida,
                      exportar_json, imagem_ao_lado, ler_planilha,
                      ler_tabela_exportada, separar_chave)
 from ..exportacao import escrever_texto, nome_de_arquivo
@@ -164,7 +165,7 @@ class Azulejo:
     def atualizar(self, resumo, informacoes):
         """Põe no azulejo o que o banco diz agora. Sai na hora se nada
         mudou — é o que faz `recarregar` custar quase nada."""
-        texto = _resumo(informacoes) or "sem informações da planilha"
+        texto = _resumo(informacoes) or "sem informações da lista"
         chave = (resumo["nome"], texto, tuple(resumo["tubos"]), resumo["tem_foto"])
         if chave == self.chave:
             return
@@ -300,32 +301,62 @@ class AbaDoBanco(ttk.Frame):
         self.titulo = ttk.Label(linha1, text=self.banco.nome,
                                 style=app.estilo("Secao.TLabel"), font=("Segoe UI", 12, "bold"))
         self.titulo.pack(side="left")
-        ttk.Button(linha1, text="Renomear", style=app.estilo("Neutro.TButton"),
-                   command=self.renomear).pack(side="left", padx=(10, 0))
+        dica = app.dicas.registrar
+        dica(ttk.Button(linha1, text="Renomear", style=app.estilo("Neutro.TButton"),
+                        command=self.renomear),
+             "Troca o nome do banco — o título desta aba. Dois cliques na aba "
+             "também servem."
+             ).pack(side="left", padx=(10, 0))
         self.caminho_label = ttk.Label(linha1, text=self.banco.caminho,
                                        style=app.estilo("FracoFundo.TLabel"))
         self.caminho_label.pack(side="left", padx=(12, 0))
-        ttk.Button(linha1, text="Fechar aba", style=app.estilo("Neutro.TButton"),
-                   command=self.fechar).pack(side="right")
+        dica(ttk.Button(linha1, text="Fechar aba", style=app.estilo("Neutro.TButton"),
+                        command=self.fechar),
+             "Fecha esta aba. O arquivo .db continua onde está, já com tudo "
+             "gravado — dá para abrir de novo depois."
+             ).pack(side="right")
 
         # linha 2: o que entra e o que sai
         linha2 = ttk.Frame(barra, style=app.estilo("TFrame"))
         linha2.pack(fill="x", pady=(10, 0))
         ttk.Label(linha2, text="Entrada:",
                   style=app.estilo("Secao.TLabel")).pack(side="left", padx=(0, 6))
-        ttk.Button(linha2, text="Adicionar amostras da tela", style=app.estilo("TButton"),
-                   command=lambda: app.adicionar_ao_banco(self)).pack(side="left", padx=3)
-        ttk.Button(linha2, text="Importar .txt/.png exportados…",
-                   style=app.estilo("TButton"),
-                   command=self.importar_exportados).pack(side="left", padx=3)
-        ttk.Button(linha2, text="Importar planilha (.xlsx)…", style=app.estilo("TButton"),
-                   command=self.importar_planilha).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Adicionar amostras da tela", style=app.estilo("TButton"),
+                        command=lambda: app.adicionar_ao_banco(self)),
+             "Guarda aqui as amostras abertas na aba Catalogador: a tabela e o "
+             "gráfico de cada uma, com o tubo e o limite de lá. Precisa do "
+             "mapeamento carregado — é ele que dá o nome da amostra."
+             ).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Importar .txt/.png exportados…",
+                        style=app.estilo("TButton"), command=self.importar_exportados),
+             "Lê de volta os .txt que o programa salvou (o .png de mesmo nome "
+             "entra junto). Também precisa do mapeamento."
+             ).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Importar lista de amostras (.xlsx)…",
+                        style=app.estilo("TButton"), command=self.importar_planilha),
+             "Traz as informações de cada amostra de uma planilha: a primeira "
+             "linha são as categorias e uma das colunas é o nome da amostra. "
+             "Cada coluna vira uma categoria deste banco."
+             ).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Importar outro banco (.db)…",
+                        style=app.estilo("TButton"), command=self.importar_banco),
+             "Junta a este banco tudo o que há em outro arquivo .db: amostras, "
+             "informações, fotos e medições. O que já está preenchido aqui "
+             "não é sobrescrito."
+             ).pack(side="left", padx=3)
         ttk.Label(linha2, text="Saída:",
                   style=app.estilo("Secao.TLabel")).pack(side="left", padx=(18, 6))
-        ttk.Button(linha2, text="Salvar cópia (.db)…", style=app.estilo("Sucesso.TButton"),
-                   command=self.salvar_copia).pack(side="left", padx=3)
-        ttk.Button(linha2, text="Exportar JSON…", style=app.estilo("Sucesso.TButton"),
-                   command=self.exportar_json).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Salvar cópia (.db)…", style=app.estilo("Sucesso.TButton"),
+                        command=self.salvar_copia),
+             "Grava uma cópia deste banco num arquivo .db — para levar, mandar "
+             "ou guardar. O banco aberto já é gravado a cada mudança."
+             ).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Exportar JSON…", style=app.estilo("Sucesso.TButton"),
+                        command=self.exportar_json),
+             "Gera o .json do catálogo (uma entrada por amostra, com as "
+             "categorias e os elementos por tubo) e a pasta \"dados\" com as "
+             "imagens ao lado dele."
+             ).pack(side="left", padx=3)
 
         # linha 3: procurar, categorias e o resumo
         linha3 = ttk.Frame(barra, style=app.estilo("TFrame"))
@@ -337,12 +368,20 @@ class AbaDoBanco(ttk.Frame):
                           style=app.estilo("TEntry"))
         busca.pack(side="left")
         busca.bind("<Return>", lambda _e: self.recarregar())
-        ttk.Button(linha3, text="Buscar", style=app.estilo("Neutro.TButton"),
-                   command=self.recarregar).pack(side="left", padx=(6, 0))
-        ttk.Button(linha3, text="Limpar", style=app.estilo("Neutro.TButton"),
-                   command=self.limpar_busca).pack(side="left", padx=(4, 0))
-        ttk.Button(linha3, text="Categorias…", style=app.estilo("Neutro.TButton"),
-                   command=self.gerenciar_categorias).pack(side="left", padx=(18, 0))
+        dica(ttk.Button(linha3, text="Buscar", style=app.estilo("Neutro.TButton"),
+                        command=self.recarregar),
+             "Filtra a página pelo texto: nome da amostra, código do arquivo "
+             "ou qualquer informação (espécie, local…). Enter também busca."
+             ).pack(side="left", padx=(6, 0))
+        dica(ttk.Button(linha3, text="Limpar", style=app.estilo("Neutro.TButton"),
+                        command=self.limpar_busca),
+             "Desfaz a busca e mostra todas as amostras."
+             ).pack(side="left", padx=(4, 0))
+        dica(ttk.Button(linha3, text="Categorias…", style=app.estilo("Neutro.TButton"),
+                        command=self.gerenciar_categorias),
+             "Cria, renomeia, reordena e apaga as categorias (as colunas de "
+             "informação) deste banco. As duas primeiras aparecem nos azulejos."
+             ).pack(side="left", padx=(18, 0))
         self.status = ttk.Label(linha3, text="", style=app.estilo("FracoFundo.TLabel"))
         self.status.pack(side="right")
 
@@ -447,7 +486,7 @@ class AbaDoBanco(ttk.Frame):
                                     if busca else
                                     "Banco vazio. Carregue amostras e o mapeamento na aba "
                                     "Catalogador e use \"Adicionar amostras da tela\", ou "
-                                    "importe a planilha de informações."))
+                                    "importe a lista de amostras (.xlsx)."))
             self.canvas.itemconfigure(self._item_vazio, state="normal")
         else:
             self.canvas.itemconfigure(self._item_vazio, state="hidden")
@@ -606,9 +645,10 @@ class AbaDoBanco(ttk.Frame):
         cabecalho.pack(fill="x")
         ttk.Label(cabecalho, text=titulo,
                   style=app.estilo("Subtitulo.TLabel")).pack(side="left")
-        for texto, comando, papel in reversed(botoes):
-            ttk.Button(cabecalho, text=texto, style=app.estilo(papel),
-                       command=comando).pack(side="right", padx=(6, 0))
+        for texto, comando, papel, dica in reversed(botoes):
+            app.dicas.registrar(
+                ttk.Button(cabecalho, text=texto, style=app.estilo(papel), command=comando),
+                dica).pack(side="right", padx=(6, 0))
         corpo = ttk.Frame(cartao, style=app.estilo("Painel.TFrame"))
         corpo.pack(fill="x", pady=(8, 0))
         return corpo
@@ -621,25 +661,38 @@ class AbaDoBanco(ttk.Frame):
         # o cabeçalho: voltar, o nome, e o que age sobre a amostra inteira
         topo = ttk.Frame(self.miolo, style=app.estilo("TFrame"))
         topo.pack(fill="x", pady=(0, 12))
-        ttk.Button(topo, text="\u2190 Voltar à lista", style=app.estilo("Neutro.TButton"),
-                   command=self.voltar).pack(side="left")
+        dica = app.dicas.registrar
+        dica(ttk.Button(topo, text="\u2190 Voltar à lista", style=app.estilo("Neutro.TButton"),
+                        command=self.voltar),
+             "Volta para a página com todas as amostras. O que foi editado "
+             "aqui já está gravado."
+             ).pack(side="left")
         ttk.Label(topo, text=amostra["nome"], style=app.estilo("Secao.TLabel"),
                   font=("Segoe UI", 14, "bold")).pack(side="left", padx=(14, 0))
-        ttk.Button(topo, text="Excluir amostra", style=app.estilo("Perigo.TButton"),
-                   command=lambda: self.excluir_amostra(amostra_id)).pack(side="right")
-        ttk.Button(topo, text="Renomear amostra", style=app.estilo("Neutro.TButton"),
-                   command=lambda: self.renomear_amostra(amostra_id)).pack(side="right", padx=6)
+        dica(ttk.Button(topo, text="Excluir amostra", style=app.estilo("Perigo.TButton"),
+                        command=lambda: self.excluir_amostra(amostra_id)),
+             "Apaga esta amostra do banco, com as informações e todas as "
+             "medições dela. Pergunta antes; não tem desfazer."
+             ).pack(side="right")
+        dica(ttk.Button(topo, text="Renomear amostra", style=app.estilo("Neutro.TButton"),
+                        command=lambda: self.renomear_amostra(amostra_id)),
+             "Troca o nome da amostra. É por ele que o mapeamento e a lista "
+             "de amostras a encontram."
+             ).pack(side="right", padx=6)
 
         # as informações: uma caixa por categoria
         corpo = self._secao("Informações", [
-            ("Nova categoria…", lambda: self.nova_categoria(amostra_id), "Cartao.Neutro.TButton"),
-            ("Gerenciar categorias…", self.gerenciar_categorias, "Cartao.Neutro.TButton")])
+            ("Nova categoria…", lambda: self.nova_categoria(amostra_id), "Cartao.Neutro.TButton",
+             "Cria uma categoria nova — uma caixa a mais aqui e em todas as "
+             "outras amostras do banco."),
+            ("Gerenciar categorias…", self.gerenciar_categorias, "Cartao.Neutro.TButton",
+             "Renomeia, reordena e apaga as categorias do banco.")])
         categorias = banco.categorias()
         valores = banco.atributos(amostra_id)
         if not categorias:
             ttk.Label(corpo, style=app.estilo("Fraco.TLabel"),
-                      text="Este banco ainda não tem categorias. Importe a planilha "
-                           "de informações ou crie uma em \"Nova categoria…\".").pack(anchor="w")
+                      text="Este banco ainda não tem categorias. Importe a lista de "
+                           "amostras (.xlsx) ou crie uma em \"Nova categoria…\".").pack(anchor="w")
         corpo.columnconfigure(1, weight=1)
         for linha, categoria in enumerate(categorias):
             ttk.Label(corpo, text=categoria["nome"], style=app.estilo("Corpo.TLabel")
@@ -655,8 +708,11 @@ class AbaDoBanco(ttk.Frame):
 
         # a foto
         corpo = self._secao("Foto", [
-            ("Escolher foto…", lambda: self.escolher_foto(amostra_id), "Cartao.Neutro.TButton"),
-            ("Remover foto", lambda: self.remover_foto(amostra_id), "Cartao.Neutro.TButton")])
+            ("Escolher foto…", lambda: self.escolher_foto(amostra_id), "Cartao.Neutro.TButton",
+             "Guarda uma foto da amostra (png, jpg…). No JSON ela sai como a "
+             "\"imagem\" da amostra."),
+            ("Remover foto", lambda: self.remover_foto(amostra_id), "Cartao.Neutro.TButton",
+             "Tira a foto do banco. O arquivo original não é mexido.")])
         foto = banco.foto(amostra_id)
         if foto:
             self._mostrar_imagem(corpo, foto, FOTO_LARGURA_MAX)
@@ -698,13 +754,21 @@ class AbaDoBanco(ttk.Frame):
         ttk.Label(cabecalho, text="   " + " · ".join(partes),
                   style=app.estilo("Fraco.TLabel")).pack(side="left")
         mid = medicao["id"]
-        ttk.Button(cabecalho, text="Excluir medição", style=app.estilo("Cartao.Neutro.TButton"),
-                   command=lambda: self.excluir_medicao(mid)).pack(side="right")
-        ttk.Button(cabecalho, text="Salvar tabela (TXT)", style=app.estilo("Cartao.TButton"),
-                   command=lambda: self.salvar_tabela(mid)).pack(side="right", padx=6)
+        dica = app.dicas.registrar
+        dica(ttk.Button(cabecalho, text="Excluir medição", style=app.estilo("Cartao.Neutro.TButton"),
+                        command=lambda: self.excluir_medicao(mid)),
+             "Apaga só esta medição (este tubo); a amostra e as outras "
+             "medições ficam."
+             ).pack(side="right")
+        dica(ttk.Button(cabecalho, text="Salvar tabela (TXT)", style=app.estilo("Cartao.TButton"),
+                        command=lambda: self.salvar_tabela(mid)),
+             "Salva num .txt a tabela guardada com esta medição."
+             ).pack(side="right", padx=6)
         if medicao["tem_imagem"]:
-            ttk.Button(cabecalho, text="Salvar imagem (PNG)", style=app.estilo("Cartao.TButton"),
-                       command=lambda: self.salvar_imagem(mid)).pack(side="right")
+            dica(ttk.Button(cabecalho, text="Salvar imagem (PNG)", style=app.estilo("Cartao.TButton"),
+                            command=lambda: self.salvar_imagem(mid)),
+                 "Salva num .png o gráfico guardado com esta medição."
+                 ).pack(side="right")
 
         if medicao["tem_imagem"]:
             self._mostrar_imagem(quadro, banco.imagem_da_medicao(mid))
@@ -801,7 +865,7 @@ class AbaDoBanco(ttk.Frame):
     def renomear_amostra(self, amostra_id):
         atual = self.banco.amostra(amostra_id)["nome"]
         nome = perguntar_texto(self.app, "Renomear amostra",
-                               "Novo nome (é por ele que o mapeamento e a planilha "
+                               "Novo nome (é por ele que o mapeamento e a lista de amostras "
                                "encontram a amostra):", atual)
         if not nome or nome == atual:
             return
@@ -995,17 +1059,17 @@ class AbaDoBanco(ttk.Frame):
 
     def importar_planilha(self):
         caminho = filedialog.askopenfilename(
-            title="Selecione a planilha de informações das amostras",
+            title="Selecione a lista de amostras (.xlsx)",
             filetypes=[("Planilha do Excel", "*.xlsx *.xlsm")])
         if not caminho:
             return
         try:
             categorias, linhas = ler_planilha(caminho)
         except ValueError as erro:
-            messagebox.showerror("Erro ao ler a planilha", str(erro))
+            messagebox.showerror("Erro ao ler a lista de amostras", str(erro))
             return
         except Exception as erro:
-            messagebox.showerror("Erro ao ler a planilha",
+            messagebox.showerror("Erro ao ler a lista de amostras",
                                  "%s:\n%s" % (os.path.basename(caminho), erro))
             return
 
@@ -1022,7 +1086,7 @@ class AbaDoBanco(ttk.Frame):
             atualizadas, criadas, ignoradas = self.banco.importar_atributos(
                 outras, prontas, criar_amostras=criar)
         except ErroDoBanco as erro:
-            messagebox.showerror("Importar planilha", str(erro))
+            messagebox.showerror("Importar lista de amostras", str(erro))
             return
         self._reabrir() if self.amostra_aberta is not None else self.recarregar()
 
@@ -1034,7 +1098,35 @@ class AbaDoBanco(ttk.Frame):
         if sem_nome:
             texto += ("\n\n%d linha(s) puladas por estarem com a coluna \"%s\" vazia."
                       % (sem_nome, categorias[coluna]))
-        messagebox.showinfo("Planilha importada", texto)
+        messagebox.showinfo("Lista de amostras importada", texto)
+
+    def importar_banco(self):
+        """Junta a este banco o conteúdo de outro .db."""
+        caminho = filedialog.askopenfilename(
+            title="Selecione o banco (.db) a juntar a este",
+            filetypes=[("Banco de amostras", "*.db"), ("Todos os arquivos", "*.*")])
+        if not caminho:
+            return
+        if os.path.abspath(caminho) == self.banco.caminho:
+            messagebox.showinfo("Importar banco", "Esse é o próprio banco aberto.")
+            return
+        try:
+            with BancoDeAmostras(caminho) as outro:
+                nome = outro.nome
+                contagem = self.banco.importar_banco(outro)
+        except (ErroDoBanco, OSError) as erro:
+            messagebox.showerror("Importar banco", str(erro))
+            return
+        self._reabrir() if self.amostra_aberta is not None else self.recarregar()
+        messagebox.showinfo(
+            "Banco importado",
+            "De \"%s\" entraram:\n\n"
+            "%d amostra(s) nova(s) (e %d já existiam aqui);\n"
+            "%d medição(ões) nova(s), %d atualizada(s);\n"
+            "%d categoria(s) nova(s); %d foto(s)."
+            % (nome, contagem["amostras_novas"], contagem["amostras_existentes"],
+               contagem["medicoes_novas"], contagem["medicoes_atualizadas"],
+               contagem["categorias"], contagem["fotos"]))
 
     # ------------------------------------------------------------
     # Tema
@@ -1061,7 +1153,7 @@ class DialogoDaPlanilha(Dialogo):
     def __init__(self, app, arquivo, categorias, linhas, sugerida):
         self.arquivo, self.categorias, self.linhas = arquivo, categorias, linhas
         self.sugerida = sugerida
-        super().__init__(app, "Importar planilha", ok="Importar", largura=560)
+        super().__init__(app, "Importar lista de amostras", ok="Importar", largura=560)
 
     def montar(self, corpo):
         app = self.app
@@ -1116,7 +1208,7 @@ class DialogoDeCategorias(tk.Toplevel):
         corpo = ttk.Frame(self, padding=16, style=app.estilo("TFrame"))
         corpo.pack(fill="both", expand=True)
         ttk.Label(corpo, wraplength=420, style=app.estilo("TLabel"),
-                  text="As categorias são as colunas da planilha de informações. "
+                  text="As categorias são as colunas da lista de amostras (.xlsx). "
                        "Apagar uma leva embora o que está escrito nela em todas "
                        "as amostras.").pack(anchor="w", pady=(0, 8))
 
