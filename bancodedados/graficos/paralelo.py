@@ -63,6 +63,11 @@ def _pixels(args):
     return pixels_da_figura(*args)
 
 
+def _espectro(args):
+    from .espectro import png_do_espectro
+    return png_do_espectro(*args)
+
+
 # ---------- o lado de cá ----------
 
 class OficinaDeGraficos:
@@ -99,6 +104,11 @@ class OficinaDeGraficos:
     def pedir_pixels(self, kept, major, trace, total, nome, tipo):
         """Idem, mas os pixels da figura da tela (pra imagem compilada)."""
         return self._pedir(_pixels, (kept, major, trace, total, nome, tipo))
+
+    def pedir_espectro(self, contagens, energias, titulo, marcas, calibrado, tempo_vivo):
+        """Idem, mas o desenho de um espectro (.mca)."""
+        return self._pedir(_espectro, (contagens, energias, titulo, marcas,
+                                       calibrado, tempo_vivo))
 
     def _pedir(self, funcao, args):
         pool = self._obter()

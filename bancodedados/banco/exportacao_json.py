@@ -24,11 +24,15 @@
             "Ag": "dados/espectros/frx/agv/061025ab_agv.png",
             "Rh": "dados/espectros/frx/rhv/150725ab_rhv.png",
             "Au": "dados/espectros/frx/auv/220725ab_auv.png"
+        },
+        "graficos": {
+            "Ag": "dados/graficos/frx/agv/061025ab_agv.png",
+            ...
         }
     }
 
 As chaves fixas (id, filename, tecnica, nome, rotulo, elementos,
-arquivos, imagem, espectros) são as mesmas em qualquer banco; o que
+arquivos, imagem, espectros, graficos) são as mesmas em qualquer banco; o que
 muda de um banco para outro são as categorias, que entram entre
 "rotulo" e "elementos" com o nome que têm na planilha.
 
@@ -38,6 +42,9 @@ muda de um banco para outro são as categorias, que entram entre
     Au); `arquivos` traz o código de cada tubo;
   * `imagem` é a foto da amostra, se houver — senão, o gráfico da
     primeira medição, como no exemplo que serviu de modelo;
+  * `espectros` é o desenho do ESPECTRO (o .mca) de cada tubo, quando
+    ele está no banco; sem .mca, entra o gráfico da medição no lugar.
+    `graficos` traz sempre o gráfico (pizza/barras) de cada tubo;
   * os PNGs são gravados ao lado do .json, nos caminhos que o JSON cita.
     Uma amostra sem medição sai com `elementos` e `espectros` vazios.
 """
@@ -89,7 +96,10 @@ def montar_entradas(banco):
         amostra_id, nome = resumo["id"], resumo["nome"]
         medicoes = banco.medicoes(amostra_id)
 
-        elementos, arquivos, espectros = {}, {}, {}
+        elementos, arquivos, espectros, graficos = {}, {}, {}, {}
+        # os .mca da amostra, pelo código do arquivo: é assim que cada
+        # um encontra a medição (o .txt) da mesma medida
+        mcas = {e["codigo"].lower(): e for e in banco.espectros(amostra_id)}
         for m in medicoes:
             chave = m["simbolo"]
             if chave in elementos:
@@ -102,20 +112,39 @@ def montar_entradas(banco):
                         for simbolo, v in valores.items()}
                 for grupo, valores in grupos.items()}
             arquivos[chave] = m["codigo"]
+            base = nome_de_arquivo(m["codigo"] or "%s-%d" % (nome, m["id"]))
+            pasta = _pasta_do_tubo(m["simbolo"])
             if m["tem_imagem"]:
-                base = nome_de_arquivo(m["codigo"] or "%s-%d" % (nome, m["id"]))
-                pasta = _pasta_do_tubo(m["simbolo"])
-                caminho = "dados/espectros/%s/%s/%s_%s.png" % (
-                    sigla.lower(), pasta, base, pasta)
-                espectros[chave] = caminho
+                caminho = "dados/graficos/%s/%s/%s_%s.png" % (sigla.lower(), pasta, base, pasta)
+                graficos[chave] = caminho
                 imagens.append((caminho, banco.imagem_da_medicao(m["id"])))
+            mca = mcas.pop(m["codigo"].lower(), None)
+            if mca is not None and mca["tem_imagem"]:
+                caminho = "dados/espectros/%s/%s/%s_%s.png" % (sigla.lower(), pasta, base, pasta)
+                espectros[chave] = caminho
+                imagens.append((caminho, banco.imagem_do_espectro(mca["id"])))
+            elif chave in graficos:
+                espectros[chave] = graficos[chave]
+        # .mca sem .txt correspondente: entra pelo tubo que ele diz
+        for mca in mcas.values():
+            if not mca["tem_imagem"]:
+                continue
+            chave = mca["simbolo"]
+            if chave in espectros:
+                chave = "%s (%s)" % (mca["simbolo"], mca["codigo"])
+            pasta = _pasta_do_tubo(mca["simbolo"])
+            caminho = "dados/espectros/%s/%s/%s_%s.png" % (
+                sigla.lower(), pasta, nome_de_arquivo(mca["codigo"]), pasta)
+            espectros[chave] = caminho
+            arquivos.setdefault(chave, mca["codigo"])
+            imagens.append((caminho, banco.imagem_do_espectro(mca["id"])))
 
         foto = banco.foto(amostra_id)
         if foto:
             imagem = "%s/%s.png" % (pasta_imagem, nome_de_arquivo(nome))
             imagens.append((imagem, foto))
         else:
-            imagem = next(iter(espectros.values()), "")
+            imagem = next(iter(graficos.values()), "")
 
         entrada = {
             "id": "%s%s-%04d" % (sigla, inicial, numero),
@@ -128,13 +157,15 @@ def montar_entradas(banco):
             # uma categoria com o nome de uma chave fixa não pode
             # atropelá-la: ganha um sufixo
             chave = categoria
-            while chave in entrada or chave in ("elementos", "arquivos", "imagem", "espectros"):
+            while chave in entrada or chave in ("elementos", "arquivos", "imagem",
+                                                "espectros", "graficos"):
                 chave += " (categoria)"
             entrada[chave] = valor
         entrada["elementos"] = elementos
         entrada["arquivos"] = arquivos
         entrada["imagem"] = imagem
         entrada["espectros"] = espectros
+        entrada["graficos"] = graficos
         entradas.append(entrada)
 
     return entradas, imagens

@@ -72,8 +72,8 @@ def impressao_da_medida(leituras):
     o .txt ou mudar o limite do traço não muda a impressão, porque ela
     olha só para os pares (elemento, valor).
     """
-    partes = ";".join("%d=%.6f" % (int(z), float(valor))
-                      for z, valor, _ in sorted(leituras, key=lambda l: int(l[0])))
+    partes = ";".join("%d=%.6f" % (int(l[0]), float(l[1]))
+                      for l in sorted(leituras, key=lambda l: int(l[0])))
     return hashlib.sha1(partes.encode("utf-8")).hexdigest()
 
 
@@ -172,6 +172,11 @@ class BancoDeAmostras:
                      for l in self.con.execute("SELECT id, nome FROM amostras")])
                 self.con.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS ux_amostras_chave ON amostras (chave)")
+            if versao < 3:
+                self.con.execute("ALTER TABLE leituras ADD COLUMN energia REAL")
+                # a tabela nova, tal como está no esquema
+                inicio = ESQUEMA.index("CREATE TABLE espectros")
+                self.con.executescript(ESQUEMA[inicio:])
             self.con.execute("PRAGMA user_version = %d" % VERSAO)
 
     def _ja_tem_tabelas(self):
@@ -353,13 +358,17 @@ class BancoDeAmostras:
              WHERE a.nome LIKE ?
                 OR EXISTS (SELECT 1 FROM medicoes m
                             WHERE m.amostra_id = a.id AND m.codigo LIKE ?)
+                OR EXISTS (SELECT 1 FROM espectros e
+                            WHERE e.amostra_id = a.id AND e.codigo LIKE ?)
                 OR EXISTS (SELECT 1 FROM atributos t
                             WHERE t.amostra_id = a.id AND t.valor LIKE ?)"""
-            valores = [alvo, alvo, alvo]
+            valores = [alvo, alvo, alvo, alvo]
         linhas = self.con.execute("""
             SELECT a.id, a.nome, a.criado_em, (a.foto IS NOT NULL) AS tem_foto,
                    (SELECT GROUP_CONCAT(tubo, '|') FROM medicoes m
-                     WHERE m.amostra_id = a.id) AS tubos
+                     WHERE m.amostra_id = a.id) AS tubos,
+                   (SELECT COUNT(*) FROM espectros e
+                     WHERE e.amostra_id = a.id) AS espectros
               FROM amostras a %s
              ORDER BY a.nome COLLATE NOCASE
         """ % condicao, valores).fetchall()
@@ -368,7 +377,8 @@ class BancoDeAmostras:
             tubos = sorted({simbolo_do_tubo(t) for t in (l["tubos"] or "").split("|") if t},
                            key=ordem_do_tubo)
             saida.append({"id": l["id"], "nome": l["nome"], "criado_em": l["criado_em"],
-                          "tem_foto": bool(l["tem_foto"]), "tubos": tubos})
+                          "tem_foto": bool(l["tem_foto"]), "tubos": tubos,
+                          "espectros": l["espectros"]})
         return saida
 
     def amostra(self, amostra_id):
@@ -554,7 +564,8 @@ class BancoDeAmostras:
         if outro.caminho == self.caminho:
             raise ErroDoBanco("Esse é o próprio banco aberto.")
         contagem = {"categorias": 0, "amostras_novas": 0, "amostras_existentes": 0,
-                    "medicoes_novas": 0, "medicoes_atualizadas": 0, "fotos": 0}
+                    "medicoes_novas": 0, "medicoes_atualizadas": 0, "fotos": 0,
+                    "espectros_novos": 0, "espectros_atualizados": 0}
         with self.transacao():
             categorias = {}
             for categoria in outro.categorias():
@@ -571,8 +582,15 @@ class BancoDeAmostras:
                 if resumo["tem_foto"] and self.foto(amostra_id) is None:
                     self.definir_foto(amostra_id, outro.foto(resumo["id"]))
                     contagem["fotos"] += 1
+                for e in outro.espectros(resumo["id"]):
+                    _, nova = self.guardar_espectro(
+                        amostra_id, e["codigo"], e["tubo"], e["canais"],
+                        outro.contagens_do_espectro(e["id"]), e["calibracao"],
+                        e["tempo_vivo"], e["tempo_real"], e["inicio"],
+                        outro.imagem_do_espectro(e["id"]))
+                    contagem["espectros_novos" if nova else "espectros_atualizados"] += 1
                 for m in outro.medicoes(resumo["id"]):
-                    leituras = [(l["z"], l["valor"], l["grupo"])
+                    leituras = [(l["z"], l["valor"], l["grupo"], l["energia"])
                                 for l in outro.leituras(m["id"])]
                     _, nova = self.guardar_medicao(
                         amostra_id, m["tubo"], m["codigo"], leituras, m["limite"],
@@ -619,20 +637,29 @@ class BancoDeAmostras:
         return None if linha is None else linha[0]
 
     def leituras(self, medicao_id):
-        """[{"z", "symbol", "valor", "grupo"}], do maior valor pro menor."""
+        """[{"z", "symbol", "valor", "grupo", "energia"}], do maior valor
+        pro menor. A energia (keV) pode ser None: medições da planilha
+        de concentrações não têm."""
         return [{"z": z, "symbol": PERIODIC_TABLE.get(z, "Z%d" % z),
-                 "valor": valor, "grupo": grupo}
-                for z, valor, grupo in self.con.execute(
-                    "SELECT z, valor, grupo FROM leituras WHERE medicao_id = ? "
+                 "valor": valor, "grupo": grupo, "energia": energia}
+                for z, valor, grupo, energia in self.con.execute(
+                    "SELECT z, valor, grupo, energia FROM leituras WHERE medicao_id = ? "
                     "ORDER BY valor DESC, z", (medicao_id,))]
+
+    def marcas(self, medicao_id):
+        """[(energia, símbolo)] dos elementos que ficaram no gráfico —
+        as etiquetas dos picos no espectro."""
+        return [(l["energia"], l["symbol"]) for l in self.leituras(medicao_id)
+                if l["energia"] and l["grupo"] != DESCARTADO]
 
     def guardar_medicao(self, amostra_id, tubo, codigo, leituras, limite,
                         tabela="", imagem=None, grandeza="Área", unidade="cps",
                         tipo_grafico="", descartados=()):
         """Guarda uma medição. Devolve (id, entrou_agora).
 
-        `leituras` é [(z, valor, grupo)] com TODOS os elementos lidos —
-        os descartados também, com o grupo "descartado".
+        `leituras` é [(z, valor, grupo)] ou [(z, valor, grupo, energia)]
+        com TODOS os elementos lidos — os descartados também, com o
+        grupo "descartado". A energia (keV) é opcional.
 
         Se a mesma medida já estiver no banco, ela é ATUALIZADA — tubo,
         limite, tabela, imagem, grupos — e passa a pertencer a esta
@@ -674,13 +701,100 @@ class BancoDeAmostras:
                 self.con.execute("DELETE FROM leituras WHERE medicao_id = ?",
                                  (medicao_id,))
             self.con.executemany(
-                "INSERT INTO leituras (medicao_id, z, valor, grupo) VALUES (?, ?, ?, ?)",
-                [(medicao_id, int(z), float(valor), grupo) for z, valor, grupo in leituras])
+                "INSERT INTO leituras (medicao_id, z, valor, grupo, energia) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(medicao_id, int(l[0]), float(l[1]), l[2],
+                  float(l[3]) if len(l) > 3 and l[3] is not None else None)
+                 for l in leituras])
         return medicao_id, nova
 
     def excluir_medicao(self, medicao_id):
         with self.transacao():
             self.con.execute("DELETE FROM medicoes WHERE id = ?", (medicao_id,))
+
+    # ============================================================
+    # Espectros (os .mca)
+    # ============================================================
+
+    def espectros(self, amostra_id):
+        """Os espectros de uma amostra, sem os blobs."""
+        linhas = [dict(l) for l in self.con.execute("""
+            SELECT id, amostra_id, codigo, tubo, canais, calibracao, tempo_vivo,
+                   tempo_real, inicio, criado_em, (imagem IS NOT NULL) AS tem_imagem
+              FROM espectros WHERE amostra_id = ?""", (amostra_id,))]
+        for e in linhas:
+            e["simbolo"] = simbolo_do_tubo(e["tubo"])
+            e["tem_imagem"] = bool(e["tem_imagem"])
+            e["calibracao"] = json.loads(e["calibracao"] or "[]")
+        linhas.sort(key=lambda e: (ordem_do_tubo(e["tubo"]), e["codigo"]))
+        return linhas
+
+    def espectro(self, espectro_id):
+        linha = self.con.execute("""
+            SELECT id, amostra_id, codigo, tubo, canais, calibracao, tempo_vivo,
+                   tempo_real, inicio, criado_em, (imagem IS NOT NULL) AS tem_imagem
+              FROM espectros WHERE id = ?""", (espectro_id,)).fetchone()
+        if linha is None:
+            raise ErroDoBanco("Esse espectro não está mais no banco.")
+        e = dict(linha)
+        e["simbolo"] = simbolo_do_tubo(e["tubo"])
+        e["tem_imagem"] = bool(e["tem_imagem"])
+        e["calibracao"] = json.loads(e["calibracao"] or "[]")
+        return e
+
+    def espectro_por_codigo(self, codigo):
+        linha = self.con.execute(
+            "SELECT id FROM espectros WHERE codigo = ? COLLATE NOCASE",
+            (codigo or "",)).fetchone()
+        return None if linha is None else linha[0]
+
+    def imagem_do_espectro(self, espectro_id):
+        linha = self.con.execute("SELECT imagem FROM espectros WHERE id = ?",
+                                 (espectro_id,)).fetchone()
+        return None if linha is None else linha[0]
+
+    def contagens_do_espectro(self, espectro_id):
+        """O blob das contagens (ver `nucleo.mca.desempacotar_contagens`)."""
+        linha = self.con.execute("SELECT contagens FROM espectros WHERE id = ?",
+                                 (espectro_id,)).fetchone()
+        return None if linha is None else linha[0]
+
+    def guardar_espectro(self, amostra_id, codigo, tubo, canais, contagens, calibracao,
+                         tempo_vivo=None, tempo_real=None, inicio="", imagem=None):
+        """Guarda um .mca (já lido e com as contagens empacotadas).
+        Devolve (id, entrou_agora). O mesmo código de arquivo é o mesmo
+        espectro: ele é atualizado, e passa a ser desta amostra."""
+        codigo = (codigo or "").strip()
+        if not codigo:
+            raise ErroDoBanco("O espectro precisa do código do arquivo.")
+        self.amostra(amostra_id)
+        campos = (amostra_id, tubo or "Nenhum", int(canais), contagens,
+                  json.dumps(list(calibracao)), tempo_vivo, tempo_real, inicio or "", imagem)
+        ja = self.espectro_por_codigo(codigo)
+        with self.transacao():
+            if ja is None:
+                cur = self.con.execute("""
+                    INSERT INTO espectros (amostra_id, tubo, canais, contagens, calibracao,
+                        tempo_vivo, tempo_real, inicio, imagem, codigo, criado_em)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", campos + (codigo, _agora()))
+                return cur.lastrowid, True
+            self.con.execute("""
+                UPDATE espectros SET amostra_id = ?, tubo = ?, canais = ?, contagens = ?,
+                    calibracao = ?, tempo_vivo = ?, tempo_real = ?, inicio = ?, imagem = ?
+                WHERE id = ?""", campos + (ja,))
+            return ja, False
+
+    def definir_imagem_do_espectro(self, espectro_id, imagem):
+        with self.transacao():
+            self.con.execute("UPDATE espectros SET imagem = ? WHERE id = ?",
+                             (imagem, espectro_id))
+
+    def excluir_espectro(self, espectro_id):
+        with self.transacao():
+            self.con.execute("DELETE FROM espectros WHERE id = ?", (espectro_id,))
+
+    def total_de_espectros(self):
+        return self.con.execute("SELECT COUNT(*) FROM espectros").fetchone()[0]
 
     # ---------- o que o JSON precisa ----------
 
@@ -702,7 +816,8 @@ def leituras_classificadas(kept, removed, major, trace):
     tracos = {e["z"] for e in trace}
     saida = []
     for e in kept:
-        saida.append((e["z"], e["valor"], TRACO if e["z"] in tracos else MAJORITARIO))
+        saida.append((e["z"], e["valor"], TRACO if e["z"] in tracos else MAJORITARIO,
+                      e.get("energia")))
     for e in removed:
-        saida.append((e["z"], e["valor"], DESCARTADO))
+        saida.append((e["z"], e["valor"], DESCARTADO, e.get("energia")))
     return saida

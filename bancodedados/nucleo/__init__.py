@@ -13,6 +13,8 @@ devolvem a mesma coisa — amostras com uma lista de
 from .tabela_periodica import PERIODIC_TABLE
 from .leitura import parse_xrf_file, parse_mapping
 from .planilha import parse_planilha
+from .mca import (parse_mca_file, energias_por_canal, empacotar_contagens,
+                  desempacotar_contagens)
 from .fontes import (
     AREAS,
     CONCENTRACOES,
@@ -32,6 +34,10 @@ __all__ = [
     "parse_xrf_file",
     "parse_mapping",
     "parse_planilha",
+    "parse_mca_file",
+    "energias_por_canal",
+    "empacotar_contagens",
+    "desempacotar_contagens",
     "AREAS",
     "CONCENTRACOES",
     "FONTES",

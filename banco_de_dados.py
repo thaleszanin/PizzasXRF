@@ -40,6 +40,10 @@ O que esse programa faz:
          medições dos três tubos (Ag, Rh, Au) se juntam;
        - "Importar .txt/.png exportados" lê de volta os arquivos que o
          programa já salvou;
+       - "Importar espectros (.mca)" guarda o espectro bruto de cada
+         medida (mesmo nome de arquivo que o .txt), desenhado com os
+         picos nomeados; ao adicionar da tela, o .mca ao lado do .txt
+         entra sozinho;
        - "Importar lista de amostras (.xlsx)" traz as informações de
          cada amostra (primeira linha: as categorias; uma coluna: o nome
          da amostra). As categorias são do banco, e dá pra criar,
@@ -69,6 +73,7 @@ pacote `bancodedados/`, dividido por seção:
     nucleo/        <- os DADOS (nenhuma interface, nenhum gráfico)
       tabela_periodica.py   Z -> símbolo ("26" vira "Fe")
       leitura.py            parse_xrf_file, parse_mapping
+      mca.py                parse_mca_file (o espectro bruto do detector)
       planilha.py           parse_planilha (a aba "Resultados" do .xlsx)
       fontes.py             as duas grandezas: áreas e concentrações
       classificacao.py      descarte de Ar/tubo e majoritário vs. traço
@@ -80,6 +85,7 @@ pacote `bancodedados/`, dividido por seção:
       barras.py             barras, barra empilhada e Pareto
       tipos.py              a LISTA de tipos de gráfico disponíveis
       figura.py             os três gráficos de uma amostra, lado a lado
+      espectro.py           o desenho de um espectro (.mca), picos nomeados
       tema.py               repinta a figura da TELA no modo claro/escuro
       paralelo.py           a oficina: os gráficos de uma batelada em
                             vários processos (exportar, guardar no banco)

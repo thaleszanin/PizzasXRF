@@ -114,6 +114,15 @@ bancos abertos voltam sozinhos da próxima vez.
 * **"Importar .txt/.png exportados…"**: lê de volta os arquivos que o
   próprio programa salvou (o `.png` de mesmo nome entra junto). Também
   precisa do mapeamento.
+* **"Importar espectros (.mca)…"**: o espectro bruto do detector (formato
+  Amptek: 2048 canais, calibração canal→keV, tempos). O `.mca` tem o
+  mesmo nome que o `.txt` da mesma medida (`061025ab.mca`), então o
+  mapeamento vale para os dois. No banco ficam as contagens (comprimidas,
+  ~3 kB) e o desenho do espectro em escala log, com o nome de cada
+  elemento em cima do pico dele (as energias vêm do `.txt`). Na amostra,
+  o espectro aparece embaixo da medição do mesmo arquivo. E ao "Adicionar
+  amostras da tela", o `.mca` que estiver ao lado do `.txt` entra
+  sozinho — não precisa do botão.
 * **"Importar outro banco (.db)…"**: junta a este banco tudo o que há em
   outro arquivo `.db` — amostras, informações, fotos e medições. O que
   já está preenchido aqui não é sobrescrito; as medições repetidas são
@@ -161,16 +170,22 @@ bancos abertos voltam sozinhos da próxima vez.
     "espectros": {
         "Ag": "dados/espectros/frx/agv/061025ab_agv.png",
         "Rh": "dados/espectros/frx/rhv/150725ab_rhv.png"
+    },
+    "graficos": {
+        "Ag": "dados/graficos/frx/agv/061025ab_agv.png",
+        "Rh": "dados/graficos/frx/rhv/150725ab_rhv.png"
     }
 }
 ```
 
 As chaves fixas (`id`, `filename`, `tecnica`, `nome`, `rotulo`,
-`elementos`, `arquivos`, `imagem`, `espectros`) são as mesmas em qualquer
-banco; entre `rotulo` e `elementos` entram as categorias daquele banco,
-com o nome que têm nele. O `id` é a sigla da técnica + a inicial do nome
-do banco + o número da amostra; `imagem` é a foto, se houver, senão o
-gráfico da primeira medição.
+`elementos`, `arquivos`, `imagem`, `espectros`, `graficos`) são as mesmas
+em qualquer banco; entre `rotulo` e `elementos` entram as categorias
+daquele banco, com o nome que têm nele. O `id` é a sigla da técnica + a
+inicial do nome do banco + o número da amostra; `imagem` é a foto, se
+houver, senão o gráfico da primeira medição; `espectros` é o desenho do
+`.mca` de cada tubo (sem `.mca`, entra o gráfico no lugar) e `graficos`
+é sempre o gráfico de pizza/barras.
 
 O banco é um arquivo SQLite (`sqlite3` vem com o Python). A lista dos
 bancos abertos fica em `config.json`, na pasta "Catalogador XRF" do seu

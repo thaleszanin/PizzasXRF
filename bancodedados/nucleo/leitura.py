@@ -16,9 +16,12 @@ def parse_xrf_file(path):
     """Lê um .txt do XRF e devolve uma lista de dicionários, um por
     elemento (Z), já com as áreas de linhas repetidas somadas.
 
-    Cada item: {"z": int, "symbol": str, "valor": float} — aqui o valor
-    é a ÁREA do pico. A planilha de concentrações (nucleo/planilha.py)
-    devolve a mesma forma, com a concentração no lugar.
+    Cada item: {"z": int, "symbol": str, "valor": float, "energia": float}
+    — aqui o valor é a ÁREA do pico. A planilha de concentrações
+    (nucleo/planilha.py) devolve a mesma forma, com a concentração no
+    lugar (e sem energia). A "energia" (keV) é a da linha mais forte
+    do elemento: é onde o pico dele fica no espectro, e é com ela que
+    o espectro do .mca ganha o nome de cada pico.
     """
     with open(path, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
@@ -43,16 +46,21 @@ def parse_xrf_file(path):
             continue
         try:
             z = int(float(parts[0]))
+            energia = float(parts[1])
             valor = float(parts[2])
         except ValueError:
             continue  # linha não numérica, ignora
 
         if z in by_z:
             by_z[z]["valor"] += valor
+            if valor > by_z[z]["_maior"]:
+                by_z[z]["_maior"], by_z[z]["energia"] = valor, energia
         else:
             by_z[z] = {"z": z, "symbol": PERIODIC_TABLE.get(z, f"Z{z}"),
-                       "valor": valor}
+                       "valor": valor, "energia": energia, "_maior": valor}
 
+    for e in by_z.values():
+        del e["_maior"]
     return list(by_z.values())
 
 

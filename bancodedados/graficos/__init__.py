@@ -8,6 +8,7 @@ from .barras import (passos_da_barra_empilhada, passos_das_barras,
                      passos_do_pareto)
 from .tipos import TIPO_PADRAO, TIPOS, desenhador
 from .tema import pintar
+from .espectro import desenhar_espectro, png_do_espectro
 from .figura import (ESPERA, PNG_DPI, build_sample_figure, draw_sample_figure, paineis,
                      passos_da_rasterizacao, passos_do_desenho, passos_do_png,
                      pixels_da_figura, png_da_figura)
@@ -30,6 +31,8 @@ __all__ = [
     "TIPO_PADRAO",
     "desenhador",
     "pintar",
+    "desenhar_espectro",
+    "png_do_espectro",
     "paineis",
     "build_sample_figure",
     "draw_sample_figure",

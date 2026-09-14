@@ -23,6 +23,9 @@ O que entra no banco
     que tem os dados; esta aba só recebe o resultado;
   * "Importar .txt/.png exportados": os arquivos que o próprio programa
     salvou — o .txt é lido de volta e o .png de mesmo nome entra junto;
+  * "Importar espectros (.mca)": o espectro bruto de cada medida. Tem o
+    mesmo nome de arquivo que o .txt, então o mapeamento serve pros
+    dois; na amostra, aparece embaixo da medição do mesmo arquivo;
   * "Importar lista de amostras": a planilha com as informações de cada
     amostra, uma coluna por categoria;
   * "Importar outro banco": o conteúdo de outro .db, juntado a este.
@@ -166,7 +169,8 @@ class Azulejo:
         """Põe no azulejo o que o banco diz agora. Sai na hora se nada
         mudou — é o que faz `recarregar` custar quase nada."""
         texto = _resumo(informacoes) or "sem informações da lista"
-        chave = (resumo["nome"], texto, tuple(resumo["tubos"]), resumo["tem_foto"])
+        chave = (resumo["nome"], texto, tuple(resumo["tubos"]), resumo["tem_foto"],
+                 bool(resumo.get("espectros")))
         if chave == self.chave:
             return
         self.chave = chave
@@ -180,6 +184,8 @@ class Azulejo:
             self._etiqueta(tubo, True)
         if not resumo["tubos"]:
             self._etiqueta("sem medição", False)
+        if resumo.get("espectros"):
+            self._etiqueta("espectro", False)
         if resumo["tem_foto"]:
             self._etiqueta("foto", False)
         self._dispor_chips()
@@ -338,6 +344,13 @@ class AbaDoBanco(ttk.Frame):
              "linha são as categorias e uma das colunas é o nome da amostra. "
              "Cada coluna vira uma categoria deste banco."
              ).pack(side="left", padx=3)
+        dica(ttk.Button(linha2, text="Importar espectros (.mca)…",
+                        style=app.estilo("TButton"), command=self.importar_espectros),
+             "Lê os .mca (o espectro bruto do detector) e guarda cada um na "
+             "amostra que o mapeamento indica pelo nome do arquivo — o mesmo "
+             "do .txt. Ao \"Adicionar amostras da tela\", o .mca que estiver "
+             "ao lado do .txt já entra sozinho."
+             ).pack(side="left", padx=3)
         dica(ttk.Button(linha2, text="Importar outro banco (.db)…",
                         style=app.estilo("TButton"), command=self.importar_banco),
              "Junta a este banco tudo o que há em outro arquivo .db: amostras, "
@@ -452,11 +465,14 @@ class AbaDoBanco(ttk.Frame):
                         if busca else {a["id"] for a in todos})
             informacoes = self.banco.atributos_de_todas()
             total_m = self.banco.total_de_medicoes()
+            total_e = self.banco.total_de_espectros()
         except ErroDoBanco as erro:
             messagebox.showerror("Banco de amostras", str(erro))
             return
 
         texto = "%d amostra(s) · %d medição(ões)" % (len(todos), total_m)
+        if total_e:
+            texto += " · %d espectro(s)" % total_e
         if busca:
             texto = "%d de %s" % (len(visiveis), texto)
         self.status.config(text=texto)
@@ -721,8 +737,9 @@ class AbaDoBanco(ttk.Frame):
                                   "imagem da amostra é o gráfico da primeira medição.",
                       style=app.estilo("Fraco.TLabel")).pack(anchor="w")
 
-        # as medições
+        # as medições, cada uma com o espectro (.mca) do mesmo arquivo
         medicoes = banco.medicoes(amostra_id)
+        espectros = {e["codigo"].lower(): e for e in banco.espectros(amostra_id)}
         titulo = "Medições (%d)" % len(medicoes) if medicoes else "Medições"
         corpo = self._secao(titulo)
         if not medicoes:
@@ -732,10 +749,21 @@ class AbaDoBanco(ttk.Frame):
                            "da tela\" — a medição entra aqui pelo nome que o mapeamento "
                            "dá ao arquivo.").pack(anchor="w")
         for medicao in medicoes:
-            self._montar_medicao(corpo, medicao)
+            self._montar_medicao(corpo, medicao,
+                                 espectros.pop(medicao["codigo"].lower(), None))
+
+        # .mca que ainda não têm o .txt da mesma medida no banco
+        if espectros:
+            corpo = self._secao("Espectros sem medição (%d)" % len(espectros))
+            ttk.Label(corpo, wraplength=900, style=app.estilo("Fraco.TLabel"),
+                      text="Estes .mca entraram sem o .txt da mesma medida. Quando a "
+                           "medição entrar (mesmo nome de arquivo), o espectro passa "
+                           "a aparecer junto dela.").pack(anchor="w", pady=(0, 8))
+            for espectro in sorted(espectros.values(), key=lambda e: e["codigo"]):
+                self._montar_espectro(corpo, espectro)
         self._ajustar_rolagem_do_detalhe()
 
-    def _montar_medicao(self, pai, medicao):
+    def _montar_medicao(self, pai, medicao, espectro=None):
         app, banco = self.app, self.banco
         quadro = ttk.Frame(pai, style=app.estilo("Painel.TFrame"))
         quadro.pack(fill="x", pady=(0, 14))
@@ -793,6 +821,44 @@ class AbaDoBanco(ttk.Frame):
                 l["z"], l["symbol"], valor,
                 "%.2f%%" % pct if pct >= 0.005 else "<0.01%", l["grupo"]))
         tabela.pack(fill="x", pady=(8, 0))
+        if espectro is not None:
+            self._montar_espectro(quadro, espectro)
+
+    def _montar_espectro(self, pai, espectro):
+        """O espectro bruto (.mca) de uma medida: o desenho guardado e
+        uma linha com o que o cabeçalho do arquivo diz."""
+        app = self.app
+        quadro = ttk.Frame(pai, style=app.estilo("Painel.TFrame"))
+        quadro.pack(fill="x", pady=(10, 0))
+        cabecalho = ttk.Frame(quadro, style=app.estilo("Painel.TFrame"))
+        cabecalho.pack(fill="x")
+        ttk.Label(cabecalho, text="espectro", style=app.estilo("Chip.TLabel")).pack(side="left")
+        partes = ["arquivo %s.mca" % espectro["codigo"], "%d canais" % espectro["canais"]]
+        if espectro["tempo_vivo"]:
+            partes.append("%.0f s de tempo vivo" % espectro["tempo_vivo"])
+        if espectro["inicio"]:
+            partes.append("medido em %s" % espectro["inicio"])
+        if not espectro["calibracao"]:
+            partes.append("sem calibração de energia (eixo em canais)")
+        ttk.Label(cabecalho, text="   " + " · ".join(partes),
+                  style=app.estilo("Fraco.TLabel")).pack(side="left")
+        eid = espectro["id"]
+        dica = app.dicas.registrar
+        dica(ttk.Button(cabecalho, text="Excluir espectro",
+                        style=app.estilo("Cartao.Neutro.TButton"),
+                        command=lambda: self.excluir_espectro(eid)),
+             "Apaga só o espectro (.mca) — a medição, se houver, fica."
+             ).pack(side="right")
+        if espectro["tem_imagem"]:
+            dica(ttk.Button(cabecalho, text="Salvar espectro (PNG)",
+                            style=app.estilo("Cartao.TButton"),
+                            command=lambda: self.salvar_espectro(eid)),
+                 "Salva num .png o desenho do espectro."
+                 ).pack(side="right", padx=6)
+            self._mostrar_imagem(quadro, self.banco.imagem_do_espectro(eid))
+        else:
+            ttk.Label(quadro, text="(este espectro está sem desenho)",
+                      style=app.estilo("Fraco.TLabel")).pack(anchor="w", pady=(6, 0))
 
     def _mostrar_imagem(self, pai, dados, largura_max=None):
         """Põe a imagem na tela. Sem `largura_max`, ela acompanha a
@@ -844,6 +910,11 @@ class AbaDoBanco(ttk.Frame):
         """Refaz a tela da amostra aberta (depois de algo mudar nela)."""
         if self.amostra_aberta is not None:
             self.abrir_amostra(self.amostra_aberta)
+
+    def recarregar_tudo(self):
+        """A página e, se houver, a amostra aberta."""
+        self.recarregar()
+        self._reabrir()
 
     def nova_categoria(self, amostra_id=None):
         nome = perguntar_texto(self.app, "Nova categoria",
@@ -932,6 +1003,44 @@ class AbaDoBanco(ttk.Frame):
         with open(caminho, "wb") as f:
             f.write(self.banco.imagem_da_medicao(medicao_id))
         messagebox.showinfo("Salvo", "Imagem salva em:\n%s" % caminho)
+
+    def excluir_espectro(self, espectro_id):
+        espectro = self.banco.espectro(espectro_id)
+        if not messagebox.askyesno(
+                "Excluir espectro",
+                "Excluir o espectro do arquivo %s.mca?" % espectro["codigo"],
+                icon=messagebox.WARNING, default=messagebox.NO):
+            return
+        self.banco.excluir_espectro(espectro_id)
+        self._reabrir()
+
+    def salvar_espectro(self, espectro_id):
+        espectro = self.banco.espectro(espectro_id)
+        nome = self.banco.amostra(espectro["amostra_id"])["nome"]
+        caminho = filedialog.asksaveasfilename(
+            defaultextension=".png", filetypes=[("Imagem PNG", "*.png")],
+            initialfile="%s.png" % nome_de_arquivo("%s - espectro %s" % (nome, espectro["codigo"])))
+        if not caminho:
+            return
+        with open(caminho, "wb") as f:
+            f.write(self.banco.imagem_do_espectro(espectro_id))
+        messagebox.showinfo("Salvo", "Espectro salvo em:\n%s" % caminho)
+
+    def importar_espectros(self):
+        """Os .mca escolhidos viram espectros — quem faz o trabalho é a
+        janela principal (`App.importar_espectros`), que tem a oficina e
+        a fila; aqui só se escolhem os arquivos."""
+        if not self.app.name_mapping:
+            messagebox.showwarning(
+                "Falta o mapeamento",
+                "Carregue o mapeamento na aba Catalogador (botão 2) antes: é ele "
+                "que diz a que amostra cada .mca pertence.")
+            return
+        caminhos = filedialog.askopenfilenames(
+            title="Selecione os espectros (.mca)",
+            filetypes=[("Espectros do detector", "*.mca"), ("Todos os arquivos", "*.*")])
+        if caminhos:
+            self.app.importar_espectros(self, caminhos)
 
     def salvar_tabela(self, medicao_id):
         medicao = self.banco.medicao(medicao_id)

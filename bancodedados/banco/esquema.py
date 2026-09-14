@@ -41,6 +41,11 @@ O que mora nele
                  grupo em que caiu (majoritário, traço ou descartado).
                  Linha por elemento, e não um blob com a tabela: "qual a
                  média de Fe nas cinzas?" vira uma consulta.
+* `espectros`  — o .mca de uma medida: as contagens brutas (comprimidas,
+                 uns 3 kB) e o desenho delas em PNG. Pendura na amostra
+                 pelo nome e se liga à medição pelo CÓDIGO do arquivo
+                 (061025ab.mca e 061025ab.txt são a mesma medida), sem
+                 chave estrangeira: o .mca pode entrar antes do .txt.
 
 A `impressao` de uma medição é um resumo dos pares (elemento, valor) e
 é única: reimportar a mesma batelada não duplica nada — a medição que
@@ -54,7 +59,9 @@ já estava é ATUALIZADA com a classificação e a imagem novas.
 #   2  `amostras.chave`: o nome normalizado, com índice único — achar
 #      uma amostra pelo nome virou uma busca por índice, não uma
 #      varredura em Python (a importação da planilha era O(n²))
-VERSAO = 2
+#   3  `espectros` (o .mca de cada medida) e `leituras.energia` (onde o
+#      pico de cada elemento fica, pra nomear os picos do espectro)
+VERSAO = 3
 
 # Os grupos em que uma leitura pode cair.
 MAJORITARIO, TRACO, DESCARTADO = "majoritário", "traço", "descartado"
@@ -119,6 +126,25 @@ CREATE TABLE leituras (
     z          INTEGER NOT NULL,
     valor      REAL    NOT NULL,
     grupo      TEXT    NOT NULL,
+    energia    REAL,                        -- keV da linha mais forte (do .txt)
     PRIMARY KEY (medicao_id, z)
 ) WITHOUT ROWID;
+
+CREATE TABLE espectros (
+    id         INTEGER PRIMARY KEY,
+    amostra_id INTEGER NOT NULL REFERENCES amostras(id) ON DELETE CASCADE,
+    codigo     TEXT    NOT NULL,            -- nome do .mca (= o do .txt)
+    tubo       TEXT    NOT NULL DEFAULT 'Nenhum',
+    canais     INTEGER NOT NULL,
+    contagens  BLOB    NOT NULL,            -- ver nucleo/mca.py
+    calibracao TEXT    NOT NULL DEFAULT '[]',  -- [[canal, keV], ...] em JSON
+    tempo_vivo REAL,
+    tempo_real REAL,
+    inicio     TEXT    NOT NULL DEFAULT '',
+    imagem     BLOB,                        -- o desenho do espectro em PNG
+    criado_em  TEXT    NOT NULL,
+    UNIQUE (codigo COLLATE NOCASE)
+);
+
+CREATE INDEX ix_espectros_amostra ON espectros (amostra_id);
 """

@@ -66,6 +66,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from ..nucleo.leitura import parse_xrf_file, parse_mapping
+from ..nucleo.mca import empacotar_contagens, energias_por_canal, parse_mca_file
 from ..nucleo.planilha import parse_planilha
 from ..nucleo.fontes import CONCENTRACOES, FONTE_PADRAO, FONTES
 from ..nucleo.classificacao import TUBE_OPTIONS, apply_exclusions, classify
@@ -73,13 +74,14 @@ from ..graficos.figura import (ESPERA, FIG_DPI, FIG_SIZE, passos_da_rasterizacao
                               passos_do_desenho, passos_do_png, png_da_figura)
 from ..graficos.tipos import TIPO_PADRAO, TIPOS
 from ..graficos.paralelo import OficinaDeGraficos
+from ..graficos.espectro import png_do_espectro
 from ..graficos.tema import pintar
 from .tema import TEMA_PADRAO, outro, pintar_janela, preparar, trocar
 from .banco_view import AbaDoBanco
 from .dialogos import escolher
 from .dicas import Dicas
 from ..banco import (BancoDeAmostras, ErroDoBanco, bancos_lembrados,
-                     lembrar_bancos, leituras_classificadas)
+                     lembrar_bancos, leituras_classificadas, simbolo_do_tubo)
 from ..exportacao import (PilhaDeImagens, bloco_da_amostra, cabecalho_da_tabela,
                           caminho_livre, documento_compilado, escrever_bytes,
                           escrever_texto, linhas_da_tabela, nome_de_arquivo,
@@ -1019,7 +1021,9 @@ class App(tk.Tk):
                 messagebox.showerror("Erro ao ler arquivo", str(err))
                 continue
             code = os.path.splitext(os.path.basename(path))[0]
-            self.samples.append({"code": code, "elements": elements})
+            # o caminho fica guardado por causa do .mca: o espectro bruto
+            # de mesmo nome, ao lado do .txt, entra junto no banco
+            self.samples.append({"code": code, "elements": elements, "path": path})
         # só os cartões novos são criados; os que já estavam na tela
         # continuam de pé, com o gráfico deles intacto
         self._sync_cards()
@@ -1627,13 +1631,76 @@ class App(tk.Tk):
         self._aba_em_uso = aba
         self._iniciar_lote(self._lote_do_banco(aba, amostras), "Guardando no banco\u2026")
 
+    # ---------- os espectros (.mca) ----------
+
+    @staticmethod
+    def _mca_ao_lado(sample):
+        """O .mca de mesmo nome que o .txt da amostra, se existir."""
+        caminho = sample.get("path")
+        if not caminho:
+            return None
+        base = os.path.splitext(caminho)[0]
+        for extensao in (".mca", ".MCA", ".Mca"):
+            if os.path.exists(base + extensao):
+                return base + extensao
+        return None
+
+    def _encomendar_espectro(self, dados, titulo, marcas):
+        """Manda o desenho de um espectro pra oficina. Devolve
+        (argumentos, Future ou None)."""
+        energias, calibrado = energias_por_canal(dados["calibracao"], len(dados["contagens"]))
+        args = (dados["contagens"].tolist(), energias.tolist(), titulo, list(marcas),
+                calibrado, dados["tempo_vivo"])
+        return args, self.oficina.pedir_espectro(*args)
+
+    def _png_do_espectro(self, args, futuro):
+        """Os bytes do .png do espectro: espera a oficina, ou desenha aqui."""
+        if futuro is not None:
+            while not futuro.done():
+                yield ESPERA
+            try:
+                return futuro.result()
+            except Exception:
+                self.oficina.disponivel = False
+        return png_do_espectro(*args)
+
+    def _guardar_espectro(self, banco, amostra_id, codigo, tubo, dados, imagem):
+        return banco.guardar_espectro(
+            amostra_id, codigo, tubo, len(dados["contagens"]),
+            empacotar_contagens(dados["contagens"]), dados["calibracao"],
+            dados["tempo_vivo"], dados["tempo_real"], dados["inicio"], imagem)
+
     def _lote_do_banco(self, aba, amostras):
         """Guarda as amostras uma a uma, em pedaços (ver `_iniciar_lote`).
         Cada medição entra no banco assim que fica pronta; o que dá
-        erro é anotado e a batelada segue."""
+        erro é anotado e a batelada segue. O .mca de mesmo nome que o
+        .txt, quando está ao lado dele, entra como o espectro da
+        medição — desenhado na oficina junto com os gráficos."""
         banco = aba.banco
-        novas, atualizadas, erros, ids = 0, 0, [], set()
+        novas, atualizadas, espectros, erros, ids = 0, 0, 0, [], set()
         futuros = self._encomendar(amostras)
+        tubo = self.tube_var.get()
+        simbolo = simbolo_do_tubo(tubo)
+        # os espectros vão pra oficina JUNTO com os gráficos, pra fila
+        # dela nunca ficar vazia; lê-los custa milissegundos
+        pedidos = []
+        for sample in amostras:
+            caminho = self._mca_ao_lado(sample)
+            if caminho is None:
+                pedidos.append(None)
+                continue
+            try:
+                dados = parse_mca_file(caminho)
+            except (ValueError, OSError) as erro:
+                erros.append("%s (espectro): %s" % (sample["code"], erro))
+                pedidos.append(None)
+                continue
+            kept, _ = apply_exclusions(sample["elements"], self.tube_z)
+            marcas = [(e["energia"], e["symbol"]) for e in kept if e.get("energia")]
+            titulo = "%s \u2014 tubo %s \u2014 %s" % (self.display_name_for(sample),
+                                                      simbolo, sample["code"])
+            pedidos.append((dados,) + self._encomendar_espectro(dados, titulo, marcas))
+
         for indice, sample in enumerate(amostras):
             nome = self.display_name_for(sample)
             try:
@@ -1642,7 +1709,7 @@ class App(tk.Tk):
                 imagem = yield from self._imagem_da_amostra(sample, nome, futuros[indice])
                 amostra_id, _ = banco.obter_ou_criar_amostra(nome)
                 _, nova = banco.guardar_medicao(
-                    amostra_id, self.tube_var.get(), sample["code"],
+                    amostra_id, tubo, sample["code"],
                     leituras_classificadas(kept, removed, major, trace), self.threshold,
                     tabela=bloco, imagem=imagem,
                     grandeza=self.fonte["grandeza"], unidade=self.unidade,
@@ -1652,6 +1719,11 @@ class App(tk.Tk):
                     novas += 1
                 else:
                     atualizadas += 1
+                if pedidos[indice] is not None:
+                    dados, args, futuro = pedidos[indice]
+                    png = yield from self._png_do_espectro(args, futuro)
+                    self._guardar_espectro(banco, amostra_id, sample["code"], tubo, dados, png)
+                    espectros += 1
             except Exception as erro:
                 erros.append("%s: %s" % (nome, erro))
             self.export_label.config(
@@ -1663,11 +1735,82 @@ class App(tk.Tk):
             self.notebook.select(aba)
         texto = ("%d medição(ões) nova(s) e %d atualizada(s) em \"%s\"."
                  % (novas, atualizadas, banco.nome))
+        if espectros:
+            texto += "\n%d espectro(s) (.mca) encontrado(s) ao lado dos .txt entraram junto." % espectros
         if erros:
             texto += "\n\nNão entraram:\n" + "\n".join(erros)
             messagebox.showwarning("Banco de amostras", texto)
         else:
             messagebox.showinfo("Banco de amostras", texto)
+
+    def importar_espectros(self, aba, caminhos):
+        """Os .mca escolhidos na aba do banco entram como espectros. O
+        nome da amostra vem do mapeamento, pelo nome do arquivo (o
+        mesmo do .txt); se a medição desse arquivo já está no banco, o
+        espectro ganha o tubo dela e os nomes dos picos."""
+        if self._lote is not None:
+            messagebox.showinfo("Espere", "Já há uma batelada em andamento.")
+            return
+        if not self.name_mapping:
+            messagebox.showwarning(
+                "Falta o mapeamento",
+                "Carregue o mapeamento na aba Catalogador (botão 2) antes: é ele "
+                "que diz a que amostra cada .mca pertence.")
+            return
+        self._aba_em_uso = aba
+        self._iniciar_lote(self._lote_de_espectros(aba, list(caminhos)),
+                           "Importando espectros\u2026")
+
+    def _lote_de_espectros(self, aba, caminhos):
+        banco = aba.banco
+        novos, atualizados, sem_nome, erros = 0, 0, [], []
+        pedidos = []
+        for caminho in caminhos:
+            codigo = os.path.splitext(os.path.basename(caminho))[0]
+            nome = self.name_mapping.get(codigo.lower())
+            if not nome:
+                sem_nome.append(codigo)
+                continue
+            try:
+                dados = parse_mca_file(caminho)
+            except (ValueError, OSError) as erro:
+                erros.append(str(erro))
+                continue
+            # a medição do mesmo arquivo, se já está no banco, diz o tubo
+            # e onde ficam os picos
+            marcas, tubo = [], self.tube_var.get()
+            amostra_id = banco.amostra_por_nome(nome)
+            if amostra_id is not None:
+                for m in banco.medicoes(amostra_id):
+                    if m["codigo"].lower() == codigo.lower():
+                        marcas, tubo = banco.marcas(m["id"]), m["tubo"]
+                        break
+            titulo = "%s \u2014 tubo %s \u2014 %s" % (nome, simbolo_do_tubo(tubo), codigo)
+            pedidos.append((nome, codigo, tubo, dados) + self._encomendar_espectro(
+                dados, titulo, marcas))
+
+        for indice, (nome, codigo, tubo, dados, args, futuro) in enumerate(pedidos):
+            try:
+                png = yield from self._png_do_espectro(args, futuro)
+                amostra_id, _ = banco.obter_ou_criar_amostra(nome)
+                _, novo = self._guardar_espectro(banco, amostra_id, codigo, tubo, dados, png)
+                novos += novo
+                atualizados += not novo
+            except Exception as erro:
+                erros.append("%s: %s" % (codigo, erro))
+            aba.status.config(text="Importando espectros\u2026 %d de %d"
+                              % (indice + 1, len(pedidos)))
+            yield
+
+        if aba in self.abas_de_banco:
+            aba.recarregar_tudo()
+        texto = "%d espectro(s) novo(s), %d atualizado(s)." % (novos, atualizados)
+        if sem_nome:
+            texto += ("\n\nFicaram de fora, por não estarem no mapeamento: %s."
+                      % ", ".join(sem_nome))
+        if erros:
+            texto += "\n\nErros:\n" + "\n".join(erros)
+        messagebox.showinfo("Espectros", texto)
 
     # ---------- renderização ----------
 
