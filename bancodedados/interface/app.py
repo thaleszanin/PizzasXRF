@@ -44,8 +44,18 @@ esse trabalho o mínimo possível:
 O conteúdo dos arquivos que os botões de salvar geram não está aqui, e
 sim em `bancodedados/exportacao.py` — esta camada só escolhe o destino e
 cuida da fila, um arquivo por vez, pra janela não congelar.
+
+As abas
+-------
+A janela é um caderno de abas: a primeira é o catalogador (tudo o que
+está descrito acima) e cada banco de amostras aberto ganha a sua
+(`interface/banco_view.py`). O que liga as duas é "Adicionar ao banco":
+as amostras da tela, classificadas com o tubo e o limite de agora, vão
+para o banco escolhido com o nome que o mapeamento dá a cada uma — por
+isso o mapeamento é obrigatório nessa hora.
 """
 
+import io
 import os
 import time
 import tkinter as tk
@@ -63,6 +73,10 @@ from ..graficos.figura import (FIG_DPI, FIG_SIZE, build_sample_figure,
 from ..graficos.tipos import TIPO_PADRAO, TIPOS
 from ..graficos.tema import pintar
 from .tema import TEMA_PADRAO, outro, pintar_janela, preparar, trocar
+from .banco_view import AbaDoBanco
+from .dialogos import escolher
+from ..banco import (BancoDeAmostras, ErroDoBanco, bancos_lembrados,
+                     lembrar_bancos, leituras_classificadas)
 from ..exportacao import (PilhaDeImagens, bloco_da_amostra, cabecalho_da_tabela,
                           caminho_livre, documento_compilado, escrever_texto,
                           linhas_da_tabela, nome_de_arquivo, pasta_da_exportacao)
@@ -555,11 +569,26 @@ class App(tk.Tk):
         self._export = None           # exportação em lote em andamento
         self._resize_job = None       # redesenho depois de mudar a janela
         self._largura_anterior = 0
+        self.abas_de_banco = []       # um AbaDoBanco por .db aberto
+        self._banco_job = None        # "adicionar ao banco" em andamento
+        self._rolaveis = []           # (quadro, canvas, depois) que rolam com a roda
+
+        # a janela é um caderno: a primeira aba é o catalogador, e cada
+        # banco aberto ganha a sua
+        self.notebook = ttk.Notebook(self, style=self.estilo("TNotebook"))
+        self.notebook.pack(fill="both", expand=True)
+        self.aba_catalogador = ttk.Frame(self.notebook, style=self.estilo("TFrame"))
+        self.notebook.add(self.aba_catalogador, text="Catalogador")
+        self.notebook.bind("<Double-1>", self._duplo_clique_na_aba)
+        # a roda do mouse rola o que está debaixo do ponteiro, seja a lista
+        # de cartões, a página de um banco ou a amostra aberta
+        self.bind_all("<MouseWheel>", self._on_mousewheel)
 
         self._build_top_controls()
         self._build_export_controls()
         self._build_scroll_area()
         self._sync_cards()
+        self._reabrir_bancos()
 
     # ---------- construção da UI ----------
 
@@ -576,15 +605,22 @@ class App(tk.Tk):
         # Fechar a janela com desenho/exportação agendados fazia o Tk
         # tentar rodar esses callbacks depois que os widgets já não
         # existiam, e o programa terminava cuspindo erro no terminal.
+        # Cancelado direto no Tcl, e não por `after_cancel`: esse também
+        # apaga o comando Python do callback, mas só sabe apagá-lo da
+        # lista DESTA janela — um `after` agendado por outro widget (o
+        # azulejo, ao perder o mouse) ficaria com o nome na lista dele e
+        # tentaria apagar de novo ao ser destruído.
         for pendente in self.tk.call("after", "info"):
             try:
-                self.after_cancel(pendente)
+                self.tk.call("after", "cancel", pendente)
             except tk.TclError:
                 pass
+        for aba in self.abas_de_banco:
+            aba.banco.fechar()
         super().destroy()
 
     def _build_top_controls(self):
-        frame = ttk.Frame(self, padding=12, style=self.estilo("TFrame"))
+        frame = ttk.Frame(self.aba_catalogador, padding=12, style=self.estilo("TFrame"))
         frame.pack(fill="x")
 
         # Cada linha é uma faixa própria: os controles (e o rótulo que
@@ -623,6 +659,11 @@ class App(tk.Tk):
                                    text="Modo %s" % outro(self.tema).lower(),
                                    command=self.on_tema_change)
         self.tema_btn.pack(side="right")
+        # os bancos: cada um abre numa aba própria
+        ttk.Button(linha0, text="Abrir banco (.db)…", style=self.estilo("Neutro.TButton"),
+                   command=self.abrir_banco).pack(side="right", padx=(0, 12))
+        ttk.Button(linha0, text="Novo banco…", style=self.estilo("Neutro.TButton"),
+                   command=self.novo_banco).pack(side="right", padx=(0, 4))
 
         ttk.Label(frame, text="Tubo de raios X utilizado:", style=self.estilo("Secao.TLabel")).grid(row=2, column=0, sticky="w", pady=(12, 0))
         linha1 = ttk.Frame(frame, style=self.estilo("TFrame"))
@@ -674,7 +715,7 @@ class App(tk.Tk):
     def _build_export_controls(self):
         """A faixa de baixo: o que vale pra batelada inteira — minimizar,
         remover e salvar todas as amostras de uma vez."""
-        frame = ttk.Frame(self, padding=(12, 0, 12, 10),
+        frame = ttk.Frame(self.aba_catalogador, padding=(12, 0, 12, 10),
                           style=self.estilo("TFrame"))
         frame.pack(fill="x")
 
@@ -695,6 +736,13 @@ class App(tk.Tk):
         ]
         for botao in self.export_buttons:
             botao.pack(side="left", padx=3)
+        # o mesmo .txt e o mesmo .png de cada amostra, só que guardados
+        # num banco em vez de numa pasta
+        self.export_buttons.append(
+            ttk.Button(frame, text="Adicionar ao banco de amostras",
+                       style=self.estilo("TButton"),
+                       command=lambda: self.adicionar_ao_banco()))
+        self.export_buttons[-1].pack(side="left", padx=(18, 3))
 
         self.export_label = ttk.Label(frame, text="",
                                       style=self.estilo("FracoFundo.TLabel"))
@@ -717,7 +765,7 @@ class App(tk.Tk):
         80 amostras, 119 ms por clique da roda. O canvas, em troca,
         desmapeia sozinho os itens que saem da tela.
         """
-        container = ttk.Frame(self, style=self.estilo("TFrame"))
+        container = ttk.Frame(self.aba_catalogador, style=self.estilo("TFrame"))
         container.pack(fill="both", expand=True)
 
         canvas = tk.Canvas(container, borderwidth=0, highlightthickness=0,
@@ -732,8 +780,9 @@ class App(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # rolar com a roda do mouse
-        canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        # rolar com a roda do mouse (o handler é da janela: ver `_on_mousewheel`)
+        self.registrar_rolagem(container, canvas,
+                               lambda: self._schedule_draw(ESPERA_ROLAGEM_MS))
 
         self.empty_label = ttk.Label(canvas,
                                      style=self.estilo("FracoFundo.TLabel"),
@@ -868,9 +917,30 @@ class App(tk.Tk):
         return max(LARGURA_MINIMA_PX,
                    self.scroll_canvas.winfo_width() - MARGEM_DO_CARTAO_PX)
 
+    def registrar_rolagem(self, quadro, canvas, depois=None):
+        """Diz que a roda do mouse, em cima de `quadro` (ou de qualquer
+        coisa dentro dele), rola `canvas`. `depois` roda em seguida."""
+        self._rolaveis.append((quadro, canvas, depois))
+
     def _on_mousewheel(self, event):
-        self.scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
-        self._schedule_draw(ESPERA_ROLAGEM_MS)
+        """A roda do mouse rola o que está debaixo do ponteiro.
+
+        É um handler só, da janela inteira, porque cada aba tem a sua
+        área rolável e o Tk (no Windows) manda a roda pra quem tem o
+        foco, não pra quem está debaixo do mouse.
+        """
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+        except (tk.TclError, KeyError):
+            return
+        while widget is not None:
+            for quadro, canvas, depois in self._rolaveis:
+                if widget is quadro:
+                    canvas.yview_scroll(int(-event.delta / 120), "units")
+                    if depois is not None:
+                        depois()
+                    return
+            widget = getattr(widget, "master", None)
 
     def _on_scrollbar(self, *args):
         self.scroll_canvas.yview(*args)
@@ -1019,6 +1089,8 @@ class App(tk.Tk):
             if card.canvas is not None:
                 card.canvas.get_tk_widget().configure(
                     background=self.cores["painel"])
+        for aba in self.abas_de_banco:
+            aba.repintar()
         # ninguém é marcado como vencido: o desenho continua valendo, só
         # as cores dele é que não. Quem estiver sendo desenhado agora já
         # sai no tema novo, porque a pintura acontece no fim do desenho.
@@ -1312,6 +1384,209 @@ class App(tk.Tk):
             base = nome_de_arquivo("%s - %s" % (nome, codigo))
         usados.add(base.lower())
         return base
+
+    # ---------- bancos de amostras ----------
+
+    def _reabrir_bancos(self):
+        """Os bancos que estavam abertos da última vez voltam sozinhos.
+        Um que não abrir mais só fica de fora — não é motivo pra travar
+        a abertura do programa."""
+        for caminho in bancos_lembrados():
+            try:
+                self._abrir_aba(BancoDeAmostras(caminho), selecionar=False)
+            except (ErroDoBanco, OSError):
+                continue
+
+    def _abrir_aba(self, banco, selecionar=True):
+        aba = AbaDoBanco(self, banco)
+        self.notebook.add(aba, text=banco.nome)
+        self.abas_de_banco.append(aba)
+        lembrar_bancos([a.banco.caminho for a in self.abas_de_banco])
+        if selecionar:
+            self.notebook.select(aba)
+        return aba
+
+    def _aba_do_caminho(self, caminho):
+        caminho = os.path.abspath(caminho)
+        return next((a for a in self.abas_de_banco if a.banco.caminho == caminho), None)
+
+    def novo_banco(self):
+        """Cria um .db vazio e abre a aba dele. Devolve a aba, ou None."""
+        caminho = filedialog.asksaveasfilename(
+            title="Onde guardar o banco novo", defaultextension=".db",
+            filetypes=[("Banco de amostras", "*.db")], initialfile="amostras.db")
+        if not caminho:
+            return None
+        aberta = self._aba_do_caminho(caminho)
+        if aberta is not None:
+            self.fechar_banco(aberta)
+        try:
+            # a caixa de diálogo já perguntou se pode sobrescrever
+            if os.path.exists(caminho):
+                os.remove(caminho)
+            banco = BancoDeAmostras(caminho, criar=True)
+        except (ErroDoBanco, OSError) as erro:
+            messagebox.showerror("Novo banco", str(erro))
+            return None
+        return self._abrir_aba(banco)
+
+    def abrir_banco(self):
+        """Abre um ou mais .db, cada um na sua aba. Um que já está
+        aberto só é trazido pra frente."""
+        caminhos = filedialog.askopenfilenames(
+            title="Selecione o(s) banco(s) de amostras",
+            filetypes=[("Banco de amostras", "*.db"), ("Todos os arquivos", "*.*")])
+        for caminho in caminhos:
+            aberta = self._aba_do_caminho(caminho)
+            if aberta is not None:
+                self.notebook.select(aberta)
+                continue
+            try:
+                self._abrir_aba(BancoDeAmostras(caminho))
+            except (ErroDoBanco, OSError) as erro:
+                messagebox.showerror("Abrir banco", str(erro))
+
+    def fechar_banco(self, aba):
+        if self._banco_job is not None and self._banco_job["aba"] is aba:
+            messagebox.showinfo("Banco em uso",
+                                "Espere terminar de adicionar as amostras.")
+            return
+        aba.banco.fechar()
+        self.notebook.forget(aba)
+        self.abas_de_banco.remove(aba)
+        aba.destroy()
+        lembrar_bancos([a.banco.caminho for a in self.abas_de_banco])
+
+    def _duplo_clique_na_aba(self, event):
+        """Dois cliques no título de uma aba de banco: renomear."""
+        try:
+            indice = self.notebook.index("@%d,%d" % (event.x, event.y))
+        except tk.TclError:
+            return
+        aba = self.nametowidget(self.notebook.tabs()[indice])
+        if isinstance(aba, AbaDoBanco):
+            aba.renomear()
+
+    def adicionar_ao_banco(self, aba=None):
+        """Guarda as amostras da tela num banco: pra cada uma, a tabela
+        e o gráfico que a exportação geraria, com o tubo e o limite de
+        agora, pendurados na amostra cujo nome o mapeamento dá.
+
+        O mapeamento é obrigatório aqui: sem ele o nome seria o código
+        do arquivo (081025af), e é pelo nome que a planilha e as medições
+        dos outros tubos se encontram.
+        """
+        if self._banco_job is not None or self._export is not None:
+            return
+        if not self.samples:
+            messagebox.showinfo("Nada para guardar",
+                                "Carregue as amostras primeiro (botão 1).")
+            return
+        if not self.name_mapping:
+            messagebox.showwarning(
+                "Falta o mapeamento",
+                "Carregue o mapeamento (botão 2) antes de guardar no banco: é ele "
+                "que dá o nome de cada amostra, e é por esse nome que as medições "
+                "dos três tubos e as informações da planilha se juntam.")
+            return
+
+        if aba is None:
+            if not self.abas_de_banco:
+                if not messagebox.askyesno(
+                        "Nenhum banco aberto",
+                        "Não há nenhum banco aberto. Quer criar um agora?"):
+                    return
+                aba = self.novo_banco()
+                if aba is None:
+                    return
+            elif len(self.abas_de_banco) == 1:
+                aba = self.abas_de_banco[0]
+            else:
+                nomes = [a.banco.nome for a in self.abas_de_banco]
+                escolhido = escolher(self, "Em que banco guardar?",
+                                     "Há %d bancos abertos. As amostras da tela vão para:"
+                                     % len(nomes), nomes, ok="Guardar")
+                if not escolhido:
+                    return
+                aba = self.abas_de_banco[nomes.index(escolhido)]
+
+        sem_nome = [s["code"] for s in self.samples
+                    if s["code"].lower() not in self.name_mapping]
+        if sem_nome and not messagebox.askyesno(
+                "Amostras fora do mapeamento",
+                "%d amostra(s) não estão no mapeamento e ficariam de fora: %s.\n\n"
+                "Guardar as outras %d?" % (len(sem_nome), ", ".join(sem_nome),
+                                           len(self.samples) - len(sem_nome)),
+                icon=messagebox.WARNING):
+            return
+        amostras = [s for s in self.samples if s["code"].lower() in self.name_mapping]
+        if not amostras:
+            messagebox.showinfo("Nada para guardar",
+                                "Nenhuma amostra da tela está no mapeamento.")
+            return
+
+        self._banco_job = {"aba": aba, "amostras": amostras, "indice": 0,
+                           "novas": 0, "atualizadas": 0, "erros": []}
+        for botao in self.export_buttons:
+            botao.state(["disabled"])
+        self.export_label.config(text="Guardando no banco\u2026")
+        self.after(1, self._banco_step)
+
+    def _banco_step(self):
+        """Guarda UMA amostra e devolve o controle ao Tk — o gráfico é o
+        caro, como na exportação."""
+        estado = self._banco_job
+        if estado is None:
+            return
+        amostras, indice = estado["amostras"], estado["indice"]
+        if indice >= len(amostras):
+            self._banco_finish()
+            return
+
+        sample = amostras[indice]
+        banco = estado["aba"].banco
+        nome = self.display_name_for(sample)
+        try:
+            kept, removed, major, trace, total = self._dados_da_amostra(sample)
+            bloco = self.bloco_de_texto(sample)
+            fig = build_sample_figure(kept, major, trace, total, nome, self.tipo)
+            try:
+                imagem = io.BytesIO()
+                fig.savefig(imagem, format="png", dpi=200, bbox_inches="tight")
+            finally:
+                fig.clear()
+            amostra_id, _ = banco.obter_ou_criar_amostra(nome)
+            _, nova = banco.guardar_medicao(
+                amostra_id, self.tube_var.get(), sample["code"],
+                leituras_classificadas(kept, removed, major, trace), self.threshold,
+                tabela=bloco, imagem=imagem.getvalue(),
+                grandeza=self.fonte["grandeza"], unidade=self.unidade,
+                tipo_grafico=self.tipo, descartados=[e["symbol"] for e in removed])
+            estado["novas" if nova else "atualizadas"] += 1
+        except Exception as erro:
+            estado["erros"].append("%s: %s" % (nome, erro))
+
+        estado["indice"] += 1
+        self.export_label.config(
+            text="Guardando no banco\u2026 %d de %d" % (estado["indice"], len(amostras)))
+        self.after(1, self._banco_step)
+
+    def _banco_finish(self):
+        estado, self._banco_job = self._banco_job, None
+        self.export_label.config(text="")
+        for botao in self.export_buttons:
+            botao.state(["!disabled"])
+        aba = estado["aba"]
+        if aba in self.abas_de_banco:
+            aba.recarregar()
+            self.notebook.select(aba)
+        texto = ("%d medição(ões) nova(s) e %d atualizada(s) em \"%s\"."
+                 % (estado["novas"], estado["atualizadas"], aba.banco.nome))
+        if estado["erros"]:
+            texto += "\n\nNão entraram:\n" + "\n".join(estado["erros"])
+            messagebox.showwarning("Banco de amostras", texto)
+        else:
+            messagebox.showinfo("Banco de amostras", texto)
 
     # ---------- renderização ----------
 

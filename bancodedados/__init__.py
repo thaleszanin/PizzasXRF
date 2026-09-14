@@ -6,12 +6,15 @@ O pacote está dividido em camadas:
   graficos/      transforma esses dados em figuras matplotlib (o tipo de
                  gráfico — pizza, rosca, barras… — está em graficos/tipos.py)
   exportacao.py  monta o conteúdo dos arquivos que o programa salva
+  banco/         o banco de amostras: o arquivo .db, a planilha de
+                 informações e o .json que sai dele
   interface/     a janela Tkinter que amarra tudo
 
 A dependência é sempre num sentido só:
-interface -> exportacao -> graficos -> nucleo. O núcleo não sabe que
-existe gráfico, o gráfico não sabe que existe janela, e a exportação não
-sabe onde os arquivos vão parar — dá para usar qualquer uma das camadas
+interface -> exportacao -> graficos -> nucleo, e interface -> banco ->
+nucleo. O núcleo não sabe que existe gráfico, o gráfico não sabe que
+existe janela, a exportação não sabe onde os arquivos vão parar e o
+banco não sabe que existe aba — dá para usar qualquer uma das camadas
 de baixo sozinha, sem abrir janela nenhuma.
 """
 

@@ -29,7 +29,8 @@ Os papéis (o nome do estilo sem o tema na frente):
     Painel.TFrame                 o que fica dentro do cartão
     TLabel / Titulo.TLabel        texto normal e o nome da amostra
     Fraco.TLabel / Aviso.TLabel   o cinza dos detalhes e o do descarte
-    FracoFundo.TLabel             o mesmo cinza, mas fora do cartão
+    FracoFundo.TLabel / AvisoFundo.TLabel
+                                  os mesmos, mas fora do cartão
     Secao.TLabel                  os rótulos em negrito dos controles
     TButton                       o botão azul, o padrão
     Sucesso.TButton               o verde (salvar a batelada)
@@ -37,7 +38,20 @@ Os papéis (o nome do estilo sem o tema na frente):
     Neutro.TButton                o discreto (minimizar, trocar de tema)
     Cartao.TButton                os mesmos, para dentro do cartão
     Cartao.Neutro.TButton         (muda só a cor que fica atrás deles)
+    Cartao.Sucesso.TButton / Cartao.Perigo.TButton
     TCombobox / TSpinbox / Horizontal.TScale / Treeview / TScrollbar
+    TEntry / TCheckbutton         as caixas de texto e de marcar
+    TNotebook / TNotebook.Tab     as abas (o catalogador e cada banco)
+    Item.TFrame / ItemRealce.TFrame
+                                  o azulejo de cada amostra na página do
+                                  banco, e ele com o mouse em cima
+                                  (Realce.TFrame: o que fica dentro dele)
+    Corpo.TLabel / Subtitulo.TLabel
+                                  texto normal e título de seção, dentro
+                                  do cartão
+    Chip.TLabel / ChipFraco.TLabel
+                                  a etiqueta de cada tubo medido (Ag, Rh,
+                                  Au) e a de "sem medição"
 
 Os estilos de botão têm o canto levemente arredondado, o que o ttk não
 faz sozinho: quem cuida disso é `cantos.py`, que troca o fundo do botão
@@ -74,6 +88,8 @@ TEMAS = {
         "botao_texto": "#FFFFFF",
         "apagado": "#5F6469",
         "barra": "#4A4A4A",
+        "realce": "#2C3036",       # o azulejo com o mouse em cima
+        "aba": "#2A2A2A",          # a aba que NÃO está selecionada
     },
     "Claro": {
         "grafico": "claro",
@@ -97,6 +113,8 @@ TEMAS = {
         "botao_texto": "#FFFFFF",
         "apagado": "#A9A399",
         "barra": "#C4BFB2",
+        "realce": "#F7F5F0",
+        "aba": "#E4E0D6",
     },
 }
 
@@ -188,13 +206,13 @@ def _estilos_do_tema(root, style, tema):
 
     style.configure(E("TLabel"), background=cores["fundo"],
                     foreground=cores["corpo"])
-    style.configure(E("Titulo.TLabel"), background=cores["painel"],
-                    foreground=cores["texto"], font=(FONTE, 12, "bold"))
-    style.configure(E("Fraco.TLabel"), background=cores["painel"],
-                    foreground=cores["fraco"])
+    # (Titulo.TLabel e Fraco.TLabel, os de dentro do cartão, nascem mais
+    # abaixo, junto com as versões deles para o azulejo em realce)
     style.configure(E("FracoFundo.TLabel"), background=cores["fundo"],
                     foreground=cores["fraco"])
     style.configure(E("Aviso.TLabel"), background=cores["painel"],
+                    foreground=cores["aviso"])
+    style.configure(E("AvisoFundo.TLabel"), background=cores["fundo"],
                     foreground=cores["aviso"])
     style.configure(E("Secao.TLabel"), background=cores["fundo"],
                     foreground=cores["texto"], font=(FONTE, 9, "bold"))
@@ -209,10 +227,65 @@ def _estilos_do_tema(root, style, tema):
         _botao(root, style, tema, prefixo + "Neutro.TButton", cores["neutro"],
                cores["neutro_claro"], cores["neutro_claro"], cores, atras,
                recheio=(8, 5), texto=cores["corpo"])
-    _botao(root, style, tema, "Sucesso.TButton", cores["verde"],
-           cores["verde_claro"], cores["verde"], cores, fundo)
-    _botao(root, style, tema, "Perigo.TButton", cores["vermelho"],
-           cores["vermelho_claro"], cores["vermelho"], cores, fundo)
+        _botao(root, style, tema, prefixo + "Sucesso.TButton", cores["verde"],
+               cores["verde_claro"], cores["verde"], cores, atras)
+        _botao(root, style, tema, prefixo + "Perigo.TButton", cores["vermelho"],
+               cores["vermelho_claro"], cores["vermelho"], cores, atras)
+
+    # a página do banco: o azulejo de cada amostra e os textos dele
+    style.configure(E("Item.TFrame"), background=cores["painel"],
+                    bordercolor=cores["borda"], relief="solid", borderwidth=1)
+    style.configure(E("ItemRealce.TFrame"), background=cores["realce"],
+                    bordercolor=cores["azul"], relief="solid", borderwidth=1)
+    style.configure(E("Realce.TFrame"), background=cores["realce"])
+    for atras, sufixo in ((cores["painel"], ""), (cores["realce"], "Realce.")):
+        style.configure(E(sufixo + "Titulo.TLabel"), background=atras,
+                        foreground=cores["texto"], font=(FONTE, 12, "bold"))
+        style.configure(E(sufixo + "Fraco.TLabel"), background=atras,
+                        foreground=cores["fraco"])
+        style.configure(E(sufixo + "Corpo.TLabel"), background=atras,
+                        foreground=cores["corpo"])
+    style.configure(E("Subtitulo.TLabel"), background=cores["painel"],
+                    foreground=cores["texto"], font=(FONTE, 10, "bold"))
+    style.configure(E("Chip.TLabel"), background=cores["azul"],
+                    foreground=cores["botao_texto"], font=(FONTE, 8, "bold"),
+                    padding=(6, 1))
+    style.configure(E("ChipFraco.TLabel"), background=cores["neutro"],
+                    foreground=cores["fraco"], font=(FONTE, 8), padding=(6, 1))
+
+    style.configure(E("TEntry"), fieldbackground=cores["campo"],
+                    foreground=cores["corpo"], insertcolor=cores["corpo"],
+                    bordercolor=cores["borda"], lightcolor=cores["campo"],
+                    darkcolor=cores["campo"], padding=4)
+    style.map(E("TEntry"), fieldbackground=[("disabled", cores["neutro"])],
+              foreground=[("disabled", cores["apagado"])])
+
+    # a caixa de marcar do clam: o fundo dela é `indicatorbackground` e o
+    # "check" é `indicatorforeground`; marcada, a caixa fica azul com o
+    # check branco, como um botão
+    style.configure(E("TCheckbutton"), background=cores["fundo"],
+                    foreground=cores["corpo"], indicatorbackground=cores["campo"],
+                    indicatorforeground=cores["botao_texto"],
+                    upperbordercolor=cores["borda"], lowerbordercolor=cores["borda"])
+    style.map(E("TCheckbutton"), background=[("active", cores["fundo"])],
+              indicatorbackground=[("selected", cores["azul"]),
+                                   ("pressed", cores["azul_escuro"])])
+
+    # o clam desenha uma moldura clara em volta das abas e do miolo; com
+    # a cor do fundo ela some, e sobra só a aba selecionada "colada" no
+    # conteúdo, que é da cor do painel
+    style.configure(E("TNotebook"), background=cores["fundo"], borderwidth=0,
+                    bordercolor=cores["fundo"], lightcolor=cores["fundo"],
+                    darkcolor=cores["fundo"], tabmargins=(8, 6, 0, 0))
+    style.configure(E("TNotebook.Tab"), background=cores["aba"],
+                    foreground=cores["fraco"], padding=(16, 7), borderwidth=0,
+                    bordercolor=cores["fundo"], lightcolor=cores["aba"],
+                    font=(FONTE, 9, "bold"))
+    style.map(E("TNotebook.Tab"),
+              background=[("selected", cores["painel"]), ("active", cores["realce"])],
+              foreground=[("selected", cores["texto"])],
+              lightcolor=[("selected", cores["painel"])],
+              expand=[("selected", (0, 0, 0, 0))])
 
     style.configure(E("TCombobox"), fieldbackground=cores["campo"],
                     background=cores["campo"], foreground=cores["corpo"],

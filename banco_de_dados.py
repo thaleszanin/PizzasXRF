@@ -30,6 +30,24 @@ O que esse programa faz:
      janela no modo escuro.
   8. Abre no modo escuro; o botão no canto de cima à direita alterna
      para o claro (a escolha vale só enquanto o programa está aberto).
+  9. E o que esta versão tem a mais: o BANCO DE AMOSTRAS. Cada arquivo
+     .db abre numa aba (o título é editável e nasce igual ao nome do
+     arquivo), e nele:
+       - "Adicionar ao banco de amostras" guarda as amostras da tela —
+         o mesmo .txt e o mesmo .png que a exportação geraria, com o
+         tubo e o limite de agora. O MAPEAMENTO é obrigatório: é ele
+         que dá o nome de cada amostra, e é por esse nome que as
+         medições dos três tubos (Ag, Rh, Au) se juntam;
+       - "Importar .txt/.png exportados" lê de volta os arquivos que o
+         programa já salvou;
+       - "Importar planilha (.xlsx)" traz as informações de cada
+         amostra (primeira linha: as categorias; uma coluna: o nome da
+         amostra). As categorias são do banco, e dá pra criar, renomear
+         e apagar — e editar os valores amostra por amostra;
+       - a página mostra um azulejo por amostra; clicar abre a amostra
+         inteira (informações, foto, cada medição com gráfico e tabela);
+       - "Salvar cópia (.db)" baixa o banco num arquivo, e "Exportar
+         JSON" gera o .json do catálogo com a pasta de imagens ao lado.
 
 Como rodar:
   1. Precisa de Python 3 instalado.
@@ -65,12 +83,22 @@ pacote `bancodedados/`, dividido por seção:
     exportacao.py  <- o CONTEÚDO DOS ARQUIVOS salvos (.txt e .png
                       compilado), sem saber onde eles vão parar
 
+    banco/         <- o BANCO DE AMOSTRAS (SQLite, nenhum Tkinter)
+      esquema.py            as tabelas: amostras, categorias, medições
+      repositorio.py        abre o .db e faz as operações
+      planilha.py           a planilha de informações (categorias)
+      importacao.py         lê de volta os .txt/.png exportados
+      exportacao_json.py    o banco inteiro como .json + imagens
+
     interface/     <- a JANELA (Tkinter)
       tema.py               as cores da janela: modo escuro e claro
-      app.py                botões, slider, cards e tabelas
+      app.py                botões, slider, cards e tabelas; as abas
+      banco_view.py         a aba de um banco: azulejos e a amostra aberta
+      dialogos.py           as janelinhas de pergunta, com o tema
 
 A dependência anda sempre num sentido só — interface -> exportacao ->
-graficos -> nucleo — então dá pra usar as camadas de baixo sozinhas.
+graficos -> nucleo, e interface -> banco -> nucleo — então dá pra usar
+as camadas de baixo sozinhas.
 Para gerar imagens num script, sem abrir janela nenhuma:
 
     import matplotlib

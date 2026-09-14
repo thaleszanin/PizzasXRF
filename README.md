@@ -21,11 +21,10 @@ diferentes.
 | Onde | O que é |
 | --- | --- |
 | `catalogador_xrf.py` | O catalogador **genérico** (pacote `catalogador/`): faz a distinção majoritário/traço de qualquer tipo de amostra, sem pastas e sem commodity. É onde os **tipos de gráfico** foram adicionados (pizza, rosca, barras, barra empilhada e Pareto). |
-| `banco_de_dados.py` | A versão (pacote `bancodedados/`) que ganha o **banco central de amostras**: pastas e subpastas editáveis por commodity (madeira, carne, soja, …). **No momento ela é uma cópia exata da genérica** — foi zerada nessa base para receber o banco de novo, já em cima dos tipos de gráfico, do tema escuro e das concentrações. O banco antigo está no histórico, no commit `89b0188`. |
+| `banco_de_dados.py` | A versão (pacote `bancodedados/`) que ganha o **banco de amostras**: cada arquivo `.db` abre numa aba, com as medições (o `.txt` e o `.png` que o programa exporta), as informações da planilha de cada amostra (categorias editáveis) e a exportação em `.json` para o catálogo. Tudo o mais — tipos de gráfico, tema, concentrações — é igual à genérica. |
 
 As duas são independentes: rodam ao mesmo tempo e não compartilham
-código — hoje o código das duas é o mesmo, e volta a divergir quando o
-banco for reconstruído no `banco_de_dados.py`. Detalhes da versão genérica em [`LEIA-ME.txt`](LEIA-ME.txt).
+código. Detalhes da versão genérica em [`LEIA-ME.txt`](LEIA-ME.txt).
 
 ## Áreas ou concentrações (versão genérica)
 
@@ -86,33 +85,89 @@ python banco_de_dados.py
 
 (A pré-análise é um programa à parte — veja a seção dela mais abaixo.)
 
-Para calcular pelas concentrações (só na versão genérica), também
-`pip install openpyxl`.
+Para calcular pelas concentrações — e, na versão com banco, para
+importar a planilha de informações — também `pip install openpyxl`.
 
 O Tkinter e o SQLite já vêm com o Python. No Linux, se o Tkinter faltar:
 `sudo apt install python3-tk`.
 
 ## O banco de amostras
 
-O botão **"Banco de amostras…"** abre a árvore de pastas. Nela dá para:
+Na versão `banco_de_dados.py`, a janela é um caderno de abas: a primeira
+é o catalogador de sempre e cada banco aberto (**"Abrir banco (.db)…"**
+ou **"Novo banco…"**, no canto de cima à direita) ganha a sua. Abrir
+vários `.db` abre várias abas; o título de cada uma nasce igual ao nome
+do arquivo e pode ser trocado (dois cliques na aba, ou "Renomear"). Os
+bancos abertos voltam sozinhos da próxima vez.
 
-* criar, renomear, mover, reordenar e apagar pastas em qualquer
-  profundidade (`1> madeira`, `1.1> in natura`, `1.1.2> pó`, `2> carne`…);
-* importar `.txt` do XRF direto para dentro de uma pasta;
-* guardar no banco as amostras que já estão abertas na tela;
-* arrastar amostras e pastas de um lugar para outro;
-* procurar amostra por nome ou por código do arquivo;
-* trazer para o catalogador tudo o que está numa pasta (com as
-  subpastas).
+**O que entra no banco**
 
-Cada amostra guarda o tubo de raios X com que foi medida, então uma
-batelada com medidas de tubos diferentes descarta o elemento certo em
-cada uma.
+* **"Adicionar ao banco de amostras"** (na aba Catalogador, ou
+  "Adicionar amostras da tela" na aba do banco): guarda as amostras que
+  estão na tela — para cada uma, a **mesma tabela `.txt` e o mesmo
+  gráfico `.png`** que a exportação geraria, classificados com o tubo e
+  o limite do traço de agora. O **mapeamento é obrigatório**: é ele que
+  dá o nome de cada amostra (`061025ab` → `M021`), e é por esse nome que
+  as medições dos três tubos (Ag, Rh, Au) e as informações da planilha
+  se juntam na mesma amostra. Reexportar a mesma batelada não duplica:
+  a medição que já estava é atualizada.
+* **"Importar .txt/.png exportados…"**: lê de volta os arquivos que o
+  próprio programa salvou (o `.png` de mesmo nome entra junto). Também
+  precisa do mapeamento.
+* **"Importar planilha (.xlsx)…"**: as informações de cada amostra. A
+  regra de forma é uma só — **a primeira linha traz os nomes das
+  categorias e uma das colunas traz o nome da amostra** (o mesmo nome
+  do mapeamento). O programa sugere a coluna que mais bate com os nomes
+  que ele conhece; na lista de madeiras, por exemplo, é o "Código NOVO
+  temático" (`M001`, `M002`…), e não a primeira. Cada banco pode ter
+  categorias diferentes: as que vierem na planilha viram as do banco.
 
-Tudo mora num arquivo só — `amostras.db`, na pasta "Catalogador FRX" do
-seu perfil de usuário. Backup é copiar esse arquivo; para o banco ser do
-laboratório inteiro, aponte o programa para um arquivo numa pasta de rede
-em "Abrir outro…".
+**O que dá para fazer nele**
+
+* a página mostra **um azulejo por amostra** (nome, as duas primeiras
+  informações e uma etiqueta por tubo medido); clicar abre a amostra
+  inteira: as informações numa caixa por categoria (editáveis na hora),
+  a foto (opcional) e cada medição com o gráfico e a tabela;
+* **"Categorias…"** cria, renomeia, reordena e apaga categorias — vale
+  para o banco inteiro;
+* **"Salvar cópia (.db)…"** baixa o banco num arquivo (o `.db` aberto já
+  é gravado a cada mudança; a cópia é para levar, mandar ou guardar);
+* **"Exportar JSON…"** gera o `.json` do catálogo e, ao lado dele, a
+  pasta `dados/` com as imagens. Uma entrada por amostra:
+
+```json
+{
+    "id": "FRXM-0003",
+    "filename": "061025ab",
+    "tecnica": {"sigla": "FRX", "nome": "Espectroscopia de Fluorescência de Raios X"},
+    "nome": "M003",
+    "rotulo": "M003",
+    "Nome popular": "Roxinho",
+    "Nome científico": "Peltogyne paniculata",
+    "Latitude": "-9.366127996",
+    "elementos": {
+        "Ag": {"Majoritários": {"Ca": 19158, "Fe": 15797}, "Traço": {"P": 992}},
+        "Rh": {"...": "..."}
+    },
+    "arquivos": {"Ag": "061025ab", "Rh": "150725ab"},
+    "imagem": "dados/imagem-madeira/M003.png",
+    "espectros": {
+        "Ag": "dados/espectros/frx/agv/061025ab_agv.png",
+        "Rh": "dados/espectros/frx/rhv/150725ab_rhv.png"
+    }
+}
+```
+
+As chaves fixas (`id`, `filename`, `tecnica`, `nome`, `rotulo`,
+`elementos`, `arquivos`, `imagem`, `espectros`) são as mesmas em qualquer
+banco; entre `rotulo` e `elementos` entram as categorias daquele banco,
+com o nome que têm nele. O `id` é a sigla da técnica + a inicial do nome
+do banco + o número da amostra; `imagem` é a foto, se houver, senão o
+gráfico da primeira medição.
+
+O banco é um arquivo SQLite (`sqlite3` vem com o Python). A lista dos
+bancos abertos fica em `config.json`, na pasta "Catalogador XRF" do seu
+perfil de usuário.
 
 ## Pré-análise
 
