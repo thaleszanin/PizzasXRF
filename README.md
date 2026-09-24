@@ -70,6 +70,18 @@ para o arquivo não depender do modo em que a janela estava aberta. As
 janelinhas de abrir/salvar arquivo e os avisos são do Windows, então
 continuam com a cara do sistema.
 
+## Baixar pronto (Windows, sem Python)
+
+O banco de dados, a pré-análise e o corretor também saem como `.exe`,
+na seção [Releases](https://github.com/thaleszanin/PizzasXRF/releases)
+do GitHub: baixe o do programa que quer e dê dois cliques. Se o Windows
+mostrar o aviso do SmartScreen, clique em "Mais informações" e depois em
+"Executar assim mesmo".
+
+Para gerar os três de novo a partir do código, dê dois cliques em
+`gerar_executavel.bat` (cada programa tem a sua receita `.spec`); eles
+saem na pasta `dist/`.
+
 ## Como rodar
 
 ```
