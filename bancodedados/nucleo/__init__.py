@@ -28,6 +28,7 @@ from .classificacao import (
     apply_exclusions,
     classify,
 )
+from .razao_tubo import razao_do_tubo, texto_da_razao
 
 __all__ = [
     "PERIODIC_TABLE",
@@ -47,4 +48,6 @@ __all__ = [
     "TUBE_OPTIONS",
     "apply_exclusions",
     "classify",
+    "razao_do_tubo",
+    "texto_da_razao",
 ]

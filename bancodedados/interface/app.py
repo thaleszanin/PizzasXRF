@@ -70,6 +70,7 @@ from ..nucleo.mca import empacotar_contagens, energias_por_canal, parse_mca_file
 from ..nucleo.planilha import parse_planilha
 from ..nucleo.fontes import CONCENTRACOES, FONTE_PADRAO, FONTES
 from ..nucleo.classificacao import TUBE_OPTIONS, apply_exclusions, classify
+from ..nucleo.razao_tubo import texto_da_razao
 from ..graficos.figura import (ESPERA, FIG_DPI, FIG_SIZE, passos_da_rasterizacao,
                               passos_do_desenho, passos_do_png, png_da_figura)
 from ..graficos.tipos import TIPO_PADRAO, TIPOS
@@ -180,6 +181,7 @@ class SampleCard:
         self._descartados = []
         self.collapsed = False
         self._aviso = ""
+        self._razao = ""         # a razão do tubo, no canto direito do aviso
         self._layout_key = None
         self._altura_tabela = 1
 
@@ -254,8 +256,17 @@ class SampleCard:
 
         self.fig = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
 
-        self.warn_label = ttk.Label(self.frame, wraplength=1100,
+        # a linha logo abaixo dos gráficos: o descarte à esquerda e a
+        # razão do tubo no canto direito
+        self.aviso_linha = ttk.Frame(self.frame, style=app.estilo("Painel.TFrame"))
+        self.warn_label = ttk.Label(self.aviso_linha, wraplength=800,
                                     style=app.estilo("Aviso.TLabel"))
+        self.warn_label.pack(side="left")
+        self.razao_label = ttk.Label(self.aviso_linha, style=app.estilo("Fraco.TLabel"))
+        self.razao_label.pack(side="right")
+        dica(self.razao_label, "Razão entre as linhas do elemento do tubo (que sai do "
+             "gráfico): Ag K/Ag L, Au/Pt ou Rh K/Rh L. Serve para conferir se ela "
+             "fica constante entre as amostras.")
 
         self.tree = ttk.Treeview(self.frame, columns=COLUNAS, show="headings",
                                  height=self._altura_tabela,
@@ -264,8 +275,8 @@ class SampleCard:
             self.tree.heading(col, text=titulo)
             self.tree.column(col, width=110, anchor="center")
 
-        if self._aviso:
-            self.warn_label.config(text=self._aviso)
+        self.warn_label.config(text=self._aviso)
+        self.razao_label.config(text=self._razao)
         self._layout_key = None
         self._aplicar_layout()
         # montado, o cartão passa a ter a altura do próprio conteúdo: o
@@ -302,17 +313,17 @@ class SampleCard:
         """(Re)empacota o corpo do cartão. Só mexe quando algo mudou de
         verdade: cada pack/pack_forget obriga o Tk a refazer o layout da
         lista inteira."""
-        chave = (self.collapsed, bool(self._aviso))
+        chave = (self.collapsed, self.tem_aviso)
         if chave == self._layout_key:
             return
         self._layout_key = chave
-        for widget in (self.plot_area, self.warn_label, self.tree):
+        for widget in (self.plot_area, self.aviso_linha, self.tree):
             widget.pack_forget()
         if self.collapsed:
             return
         self.plot_area.pack(fill="x")
-        if self._aviso:
-            self.warn_label.pack(anchor="w", pady=(4, 0))
+        if self.tem_aviso:
+            self.aviso_linha.pack(fill="x", pady=(4, 0))
         self.tree.pack(fill="x", pady=(8, 0))
 
     # ---------- parte barata: nome, avisos e tabela ----------
@@ -340,9 +351,13 @@ class SampleCard:
         self._aviso = ""
         if removed:
             self._aviso = "Descartado nesta amostra: %s" % ", ".join(self._descartados)
+        # a razão só existe com as áreas: a planilha de concentrações não
+        # separa as linhas K e L de cada elemento
+        self._razao = ("" if self.app.fonte["tipo"] == CONCENTRACOES
+                       else texto_da_razao(self.sample["elements"], tube_z))
         if self.montado:
-            if self._aviso:
-                self.warn_label.config(text=self._aviso)
+            self.warn_label.config(text=self._aviso)
+            self.razao_label.config(text=self._razao)
             self._aplicar_layout()
 
         # a altura é ajustada agora (é o que define o tamanho do cartão),
@@ -359,6 +374,11 @@ class SampleCard:
         if not self.montado:
             self._reservar_altura()
 
+    @property
+    def tem_aviso(self):
+        """Se a linha do aviso (descarte e/ou razão do tubo) aparece."""
+        return bool(self._aviso or self._razao)
+
     def _reservar_altura(self):
         """Ajusta a altura do retângulo vazio pro tamanho que o cartão
         vai ter quando for montado.
@@ -366,7 +386,7 @@ class SampleCard:
         Só mexe quando o número muda: mudar a altura empurra todos os
         cartões debaixo, e trocar o limite do traço não muda a altura de
         cartão nenhum."""
-        nova = self.app.altura_estimada(self._altura_tabela, bool(self._aviso),
+        nova = self.app.altura_estimada(self._altura_tabela, self.tem_aviso,
                                         self.collapsed)
         if nova != self.altura:
             self.frame.configure(height=nova)
@@ -878,7 +898,7 @@ class App(tk.Tk):
         # ainda não nasceram passam a reservar o espaço certo, e a lista
         # para de dar aquele pulinho quando um deles é montado
         if self._alturas is not None:
-            bruta = self._altura_bruta(card._altura_tabela, bool(card._aviso),
+            bruta = self._altura_bruta(card._altura_tabela, card.tem_aviso,
                                        card.collapsed)
             if self._correcao.get(card.collapsed) != real - bruta:
                 self._correcao[card.collapsed] = real - bruta
@@ -893,7 +913,7 @@ class App(tk.Tk):
         for card in self.cards:
             if card.montado:
                 continue
-            nova = self.altura_estimada(card._altura_tabela, bool(card._aviso),
+            nova = self.altura_estimada(card._altura_tabela, card.tem_aviso,
                                         card.collapsed)
             if nova != card.altura:
                 card.frame.configure(height=nova)

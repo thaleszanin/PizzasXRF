@@ -21,7 +21,9 @@ def parse_xrf_file(path):
     (nucleo/planilha.py) devolve a mesma forma, com a concentração no
     lugar (e sem energia). A "energia" (keV) é a da linha mais forte
     do elemento: é onde o pico dele fica no espectro, e é com ela que
-    o espectro do .mca ganha o nome de cada pico.
+    o espectro do .mca ganha o nome de cada pico. As "linhas" guardam
+    cada pico separado, [(energia, área), ...] — é o que permite dizer
+    quanto do elemento veio da linha K e quanto da L (nucleo/razao_tubo.py).
     """
     with open(path, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
@@ -53,11 +55,13 @@ def parse_xrf_file(path):
 
         if z in by_z:
             by_z[z]["valor"] += valor
+            by_z[z]["linhas"].append((energia, valor))
             if valor > by_z[z]["_maior"]:
                 by_z[z]["_maior"], by_z[z]["energia"] = valor, energia
         else:
             by_z[z] = {"z": z, "symbol": PERIODIC_TABLE.get(z, f"Z{z}"),
-                       "valor": valor, "energia": energia, "_maior": valor}
+                       "valor": valor, "energia": energia, "_maior": valor,
+                       "linhas": [(energia, valor)]}
 
     for e in by_z.values():
         del e["_maior"]
