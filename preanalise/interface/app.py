@@ -22,6 +22,11 @@ NORMALIZAÇÃO: o argônio do padrão dividido pelo argônio daquela amostra
 escolhido — ou quando faltar o pico de Ar de um dos dois lados —, no
 lugar do número vai o motivo, em cinza.
 
+Com um TUBO escolhido, o pé de cada cartão ganha, no canto direito, a
+RAZÃO DO TUBO — a mesma do banco de dados (`nucleo/razao_tubo.py`): Ag K
+/ Ag L, Au / Pt ou Rh K / Rh L, pra conferir se fica constante entre as
+amostras.
+
 Sobre desempenho
 ----------------
 Uma batelada tem dezenas de amostras, e cada uma vira uma tabela com uma
@@ -59,8 +64,11 @@ from ..nucleo import (
     LIMITE_MAXIMO,
     LIMITE_MINIMO,
     LIMITE_PADRAO,
+    DICA_DA_RAZAO,
     NOME_DO_FATOR,
     SIMBOLO_ARGONIO,
+    TUBO_PADRAO,
+    TUBOS,
     area_do_argonio,
     avaliar,
     codigo_do_arquivo,
@@ -73,8 +81,10 @@ from ..nucleo import (
     motivo_sem_fator,
     plural,
     resumo_da_amostra,
+    texto_da_razao,
 )
 from ..planilha import exportar
+from .dicas import Dicas
 from .tema import FONTE, TEMA_PADRAO, outro, pintar_janela, preparar, trocar
 
 # A margem entre o cartão e a borda da lista, e entre um cartão e outro.
@@ -112,6 +122,8 @@ RECHEIO_PX, ESPACO_PX = 22, 8
 # Quantos caracteres cabem numa linha do log e quanto ela ocupa — é o
 # que dá a altura do cartão quando o log é mais alto que a tabela.
 CARACTERES_POR_LINHA, ALTURA_DA_LINHA_PX = 46, 16
+# A linha da razão do tubo, no pé do cartão (só quando há tubo escolhido).
+ALTURA_DA_RAZAO_PX = 22
 
 # As colunas da tabela de cada amostra: (chave, título, largura, âncora).
 COLUNAS = (
@@ -182,7 +194,8 @@ class CartaoDeAmostra:
         tabela = base + linha * self.avaliacao["total"]
         texto = len(self.log_texto())
         log = ALTURA_DA_LINHA_PX * (texto // CARACTERES_POR_LINHA + 2)
-        return (RECHEIO_PX + cabecalho + ESPACO_PX + max(tabela, log)
+        razao = ALTURA_DA_RAZAO_PX if self.amostra.get("razao") else 0
+        return (RECHEIO_PX + cabecalho + ESPACO_PX + max(tabela, log) + razao
                 + self.app.correcao)
 
     # ---------- o recheio, montado só quando o cartão se aproxima ----------
@@ -223,6 +236,12 @@ class CartaoDeAmostra:
         self.corpo = ttk.Frame(self.frame, style=app.estilo("Painel.TFrame"))
         if not self.minimizado:
             self.corpo.pack(fill="both", expand=True, pady=(ESPACO_PX, 0))
+
+        # a razão do tubo, no canto direito do pé do cartão — como no
+        # banco de dados. Vem antes de tudo no `pack` pra ocupar a largura
+        # inteira embaixo da tabela e do log; só aparece com tubo escolhido
+        self.rotulo_razao = ttk.Label(self.corpo, style=app.estilo("Fraco.TLabel"))
+        app.dicas.registrar(self.rotulo_razao, DICA_DA_RAZAO)
 
         # o log vem primeiro no `pack` pra ficar com a largura dele: o
         # `wraplength` já diz onde o texto quebra, então o rótulo pede
@@ -285,7 +304,7 @@ class CartaoDeAmostra:
             return
         chave = (self.nome, round(self.app.limite, 4), self.minimizado,
                  self.amostra.get("fator"), self.amostra.get("motivo_fator"),
-                 self.amostra.get("e_padrao"))
+                 self.amostra.get("e_padrao"), self.amostra.get("razao"))
         if chave == self.mostrado:
             return
         self.mostrado = chave
@@ -317,6 +336,13 @@ class CartaoDeAmostra:
                         SITUACAO_ALTA if elemento["alto"] else SITUACAO_OK),
                 tags=("alto",) if elemento["alto"] else ())
         self.tabela.configure(height=max(1, self.avaliacao["total"]))
+        razao = self.amostra.get("razao") or ""
+        self.rotulo_razao.configure(text=razao)
+        if razao:
+            self.rotulo_razao.pack(side="bottom", anchor="e", pady=(6, 0),
+                                   before=self.rotulo_log)
+        else:
+            self.rotulo_razao.pack_forget()
         # o log pode ter ficado mais alto ou mais baixo que a tabela
         self.app.medir(self)
 
@@ -368,6 +394,8 @@ class App(tk.Tk):
         self.mapeamento = {}      # {"081025af": "Madeira 123", ...}
         self.limite = LIMITE_PADRAO
         self.codigo_padrao = None  # a amostra padrão da normalização
+        self.tubo_z = TUBOS[TUBO_PADRAO]  # o tubo, para a razão do tubo
+        self.dicas = Dicas(self)      # o balão que explica a razão do tubo
         self.opcoes_padrao = {}    # {rótulo na caixa: código da amostra}
         # as medidas do cartão: de palpite agora, medidas no primeiro
         # cartão que nascer
@@ -474,6 +502,21 @@ class App(tk.Tk):
         self.rotulo_padrao = ttk.Label(linha2, text="",
                                        style=self.estilo("FracoFundo.TLabel"))
         self.rotulo_padrao.pack(side="left", padx=(8, 0))
+
+        ttk.Label(frame, text="Tubo de raios X utilizado:",
+                  style=self.estilo("Secao.TLabel")).grid(row=3, column=0,
+                                                          sticky="w", pady=(12, 0))
+        linha3 = ttk.Frame(frame, style=self.estilo("TFrame"))
+        linha3.grid(row=3, column=1, sticky="w", pady=(12, 0))
+        self.tubo_var = tk.StringVar(value=TUBO_PADRAO)
+        tubo_combo = ttk.Combobox(linha3, textvariable=self.tubo_var,
+                                  values=list(TUBOS), state="readonly",
+                                  width=20, style=self.estilo("TCombobox"))
+        tubo_combo.pack(side="left")
+        tubo_combo.bind("<<ComboboxSelected>>", self.ao_escolher_tubo)
+        ttk.Label(linha3, text="mostra a razão do tubo no pé de cada amostra",
+                  style=self.estilo("FracoFundo.TLabel")).pack(side="left",
+                                                               padx=(8, 0))
 
     def _montar_resumo(self):
         """O log inicial: o que o conjunto inteiro tem, em cima de tudo.
@@ -769,6 +812,10 @@ class App(tk.Tk):
         self.codigo_padrao = self.opcoes_padrao.get(self.padrao_var.get())
         self._recalcular()
 
+    def ao_escolher_tubo(self, event=None):
+        self.tubo_z = TUBOS[self.tubo_var.get()]
+        self._recalcular()
+
     def _calcular_fatores(self):
         """O fator de normalização de cada amostra, contra o padrão.
 
@@ -810,6 +857,7 @@ class App(tk.Tk):
         """
         for amostra in self.amostras:
             amostra["avaliacao"] = avaliar(amostra["elements"], self.limite)
+            amostra["razao"] = texto_da_razao(amostra["elements"], self.tubo_z)
         self._atualizar_opcoes_padrao()
         self._calcular_fatores()
         for card in self.cards:

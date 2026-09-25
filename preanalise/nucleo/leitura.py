@@ -39,11 +39,13 @@ def ler_espectro(caminho):
     Cada item:
 
         {"z": int, "symbol": str, "area": float, "erro": float,
-         "linhas": int}
+         "linhas": int, "picos": [(energia, área), ...]}
 
     `linhas` é quantos picos daquele elemento entraram na conta — 1 na
     maioria das vezes, 2 quando o elemento apareceu com duas linhas de
-    emissão. O erro relativo não é calculado aqui: quem faz isso é
+    emissão. `picos` guarda cada um deles separado — é o que permite
+    dizer quanto veio da linha K e quanto da L (nucleo/razao_tubo.py).
+    O erro relativo não é calculado aqui: quem faz isso é
     `avaliacao.py`, porque depende do limite escolhido na janela.
     """
     with open(caminho, encoding="utf-8", errors="ignore") as f:
@@ -67,6 +69,7 @@ def ler_espectro(caminho):
             continue
         try:
             z = int(float(partes[0]))
+            energia = float(partes[1])
             area = float(partes[2])
             erro = abs(float(partes[3]))
         except ValueError:
@@ -75,12 +78,14 @@ def ler_espectro(caminho):
         elemento = por_z.get(z)
         if elemento is None:
             por_z[z] = {"z": z, "symbol": PERIODIC_TABLE.get(z, "Z%d" % z),
-                        "area": area, "erro": erro, "linhas": 1}
+                        "area": area, "erro": erro, "linhas": 1,
+                        "picos": [(energia, area)]}
         else:
             elemento["area"] += area
             # erros independentes se somam em quadratura, não direto
             elemento["erro"] = math.hypot(elemento["erro"], erro)
             elemento["linhas"] += 1
+            elemento["picos"].append((energia, area))
 
     if not por_z:
         raise ValueError('Nenhum pico depois de "Photopeaks" em %s'

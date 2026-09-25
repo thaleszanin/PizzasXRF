@@ -548,9 +548,15 @@ class SampleCard:
             self.canvas = None
 
     def save_table(self):
+        # sem nome no mapeamento, o nome da amostra é o código — o mesmo
+        # do .txt que veio do XRF. Salvar com ele na mesma pasta apagaria
+        # o arquivo original, então a tabela ganha o "dados" na frente
+        nome = self.display_name
+        if nome == self.sample["code"]:
+            nome = "dados %s" % nome
         path = filedialog.asksaveasfilename(
             defaultextension=".txt",
-            initialfile="%s.txt" % nome_de_arquivo(self.display_name),
+            initialfile="%s.txt" % nome_de_arquivo(nome),
             filetypes=[("Arquivo de texto", "*.txt")],
         )
         if path:

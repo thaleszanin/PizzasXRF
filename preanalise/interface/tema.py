@@ -42,6 +42,7 @@ Os papéis (o nome do estilo sem o tema na frente):
                                   estourou o limite, verde quando não
     Log.TLabel                    o texto do log ao lado da tabela
     Fator.TLabel                  o fator de normalização, no cabeçalho
+    Dica.TLabel                   o balão de dica (interface/dicas.py)
     TButton                       o botão azul, o padrão
     Sucesso.TButton               o verde (salvar a batelada)
     Perigo.TButton                o vermelho (remover todas)
@@ -207,6 +208,9 @@ def _estilos_do_tema(root, style, tema):
                     foreground=cores["fraco"])
     style.configure(E("Aviso.TLabel"), background=cores["painel"],
                     foreground=cores["aviso"])
+    # o balão de dica (interface/dicas.py)
+    style.configure(E("Dica.TLabel"), background=cores["neutro"],
+                    foreground=cores["texto"])
     style.configure(E("Secao.TLabel"), background=cores["fundo"],
                     foreground=cores["texto"], font=(FONTE, 9, "bold"))
     style.configure(E("Erro.TLabel"), background=cores["painel"],

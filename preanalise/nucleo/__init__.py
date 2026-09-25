@@ -16,7 +16,9 @@ limite, e `relatorio.py` põe isso em português.
 
 Fora desse caminho anda `normalizacao.py`, que não tem nada a ver com o
 erro do ajuste: ele compara o pico de argônio de cada amostra com o de
-uma amostra escolhida como padrão e devolve o fator de normalização.
+uma amostra escolhida como padrão e devolve o fator de normalização —
+e `razao_tubo.py`, a razão entre as linhas do elemento do tubo, que é
+uma conferência da medida (a mesma que o banco de dados mostra).
 """
 
 from .leitura import codigo_do_arquivo, ler_espectro
@@ -37,6 +39,13 @@ from .normalizacao import (
     fator_de_normalizacao,
     formatar_fator,
     motivo_sem_fator,
+)
+from .razao_tubo import (
+    DICA_DA_RAZAO,
+    TUBO_PADRAO,
+    TUBOS,
+    razao_do_tubo,
+    texto_da_razao,
 )
 from .relatorio import (
     linhas_do_resumo,
@@ -63,6 +72,11 @@ __all__ = [
     "fator_de_normalizacao",
     "formatar_fator",
     "motivo_sem_fator",
+    "DICA_DA_RAZAO",
+    "TUBO_PADRAO",
+    "TUBOS",
+    "razao_do_tubo",
+    "texto_da_razao",
     "linhas_do_resumo",
     "log_da_amostra",
     "plural",
