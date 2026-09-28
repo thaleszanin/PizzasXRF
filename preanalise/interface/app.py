@@ -55,6 +55,7 @@ custa caro no Tk, que redesenha o widget inteiro. Por isso:
 """
 
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -369,12 +370,25 @@ class CartaoDeAmostra:
                                       font=(FONTE, 9, "bold"))
 
 
+def _caminho_do_icone():
+    # No .exe empacotado o ícone vem junto em sys._MEIPASS; rodando o
+    # .py direto, ele está na pasta icones/ na raiz do projeto.
+    base = getattr(sys, "_MEIPASS", None)
+    if base is None:
+        base = os.path.join(os.path.dirname(__file__), "..", "..")
+    return os.path.join(base, "icones", "pre_analise_xrf.ico")
+
+
 class App(tk.Tk):
     """A janela."""
 
     def __init__(self):
         super().__init__()
         self.title("Pré-análise XRF")
+        try:
+            self.iconbitmap(_caminho_do_icone())
+        except tk.TclError:
+            pass
         # larga de propósito: a tabela tem seis colunas e o log ainda
         # ocupa uma faixa à direita dela
         self.geometry("1400x820")

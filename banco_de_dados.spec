@@ -12,7 +12,9 @@ a = Analysis(
     ["banco_de_dados.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    # O .ico também vai como dado solto: além de virar o ícone do .exe (via
+    # o parâmetro icon= abaixo), a janela o usa em tempo de execução.
+    datas=[("icones/banco_de_dados.ico", "icones")],
     # O openpyxl só é importado dentro de funções (é opcional no código),
     # então o PyInstaller não o enxerga sozinho; e o backend do Tk do
     # matplotlib é escolhido em tempo de execução.
@@ -40,4 +42,5 @@ exe = EXE(
     upx=False,
     # Programa de janela: sem o console preto atrás.
     console=False,
+    icon="icones/banco_de_dados.ico",
 )

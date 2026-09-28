@@ -10,6 +10,7 @@ código->nome real, aplicado antes de comparar os tubos entre si.
 """
 
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -100,10 +101,23 @@ class PainelDeTubo(ttk.LabelFrame):
         return cabecalho, aplicar_mapeamento(linhas, self.mapeamento)
 
 
+def _caminho_do_icone():
+    # No .exe empacotado o ícone vem junto em sys._MEIPASS; rodando o
+    # .py direto, ele está na pasta icones/ na raiz do projeto.
+    base = getattr(sys, "_MEIPASS", None)
+    if base is None:
+        base = os.path.join(os.path.dirname(__file__), "..")
+    return os.path.join(base, "icones", "corretor_ag_au_rh.ico")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Corretor Ag / Au / Rh")
+        try:
+            self.iconbitmap(_caminho_do_icone())
+        except tk.TclError:
+            pass
         self.geometry("1040x680")
         self.minsize(820, 480)
 

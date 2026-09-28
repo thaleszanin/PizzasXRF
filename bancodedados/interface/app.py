@@ -57,6 +57,7 @@ isso o mapeamento é obrigatório nessa hora.
 
 import io
 import os
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -616,10 +617,23 @@ class SampleCard:
         self.frame.destroy()
 
 
+def _caminho_do_icone():
+    # No .exe empacotado o ícone vem junto em sys._MEIPASS; rodando o
+    # .py direto, ele está na pasta icones/ na raiz do projeto.
+    base = getattr(sys, "_MEIPASS", None)
+    if base is None:
+        base = os.path.join(os.path.dirname(__file__), "..", "..")
+    return os.path.join(base, "icones", "banco_de_dados.ico")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Pizzas XRF")
+        try:
+            self.iconbitmap(_caminho_do_icone())
+        except tk.TclError:
+            pass
         # A janela nasce larga porque o gráfico ocupa a largura toda: os
         # rótulos têm tamanho fixo, então quanto mais estreita a janela,
         # menor sobra pra pizza. Dá pra redimensionar à vontade — os

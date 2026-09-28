@@ -12,7 +12,9 @@ a = Analysis(
     ["pre_analise_xrf.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    # O .ico também vai como dado solto: além de virar o ícone do .exe (via
+    # o parâmetro icon= abaixo), a janela o usa em tempo de execução.
+    datas=[("icones/pre_analise_xrf.ico", "icones")],
     # O openpyxl só é importado dentro de funções, então o PyInstaller
     # não o enxerga sozinho.
     hiddenimports=["openpyxl"],
@@ -40,4 +42,5 @@ exe = EXE(
     upx=False,
     # Programa de janela: sem o console preto atrás.
     console=False,
+    icon="icones/pre_analise_xrf.ico",
 )
