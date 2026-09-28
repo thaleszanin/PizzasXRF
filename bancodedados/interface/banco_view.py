@@ -175,6 +175,7 @@ class Azulejo:
         self.realcado = False
         self.selecionado = False
         self._detalhe_inteiro = ""
+        self._nome_inteiro = ""
         # as fontes são da janela (uma vez só), não de cada azulejo
         self._fontes = getattr(aba.app, "fontes_dos_azulejos", None)
         if self._fontes is None:
@@ -207,9 +208,9 @@ class Azulejo:
         if chave == self.chave:
             return
         self.chave = chave
-        self.canvas.itemconfigure(self.nome, text=resumo["nome"])
+        self._nome_inteiro = resumo["nome"]
         self._detalhe_inteiro = texto
-        self._ajustar_detalhe()
+        self._ajustar_textos()
         for retangulo, rotulo, _ in self.chips:
             self.canvas.delete(retangulo, rotulo)
         self.chips = []
@@ -243,9 +244,12 @@ class Azulejo:
             self.canvas.itemconfigure(self.marca, state="normal" if sim else "hidden")
             self.pintar()
 
-    def _ajustar_detalhe(self):
-        # o nome não pode passar por baixo da caixinha
+    def _ajustar_textos(self):
+        # nem o nome nem a linha de baixo podem passar por baixo da
+        # caixinha — ou, com um nome comprido, pra fora do azulejo
         largura = self.largura - 2 * RECHEIO - CAIXA - 6
+        self.canvas.itemconfigure(
+            self.nome, text=_cortar(self._nome_inteiro, self._fontes["nome"], largura))
         self.canvas.itemconfigure(
             self.detalhe, text=_cortar(self._detalhe_inteiro, self._fontes["detalhe"], largura))
 
@@ -264,7 +268,7 @@ class Azulejo:
         c.coords(self.caixa, cx1 - CAIXA, cy0, cx1, cy0 + CAIXA)
         c.coords(self.marca, cx1 - CAIXA / 2, cy0 + CAIXA / 2)
         if mudou_largura:
-            self._ajustar_detalhe()
+            self._ajustar_textos()
         self._dispor_chips()
 
     def _dispor_chips(self):
@@ -905,8 +909,6 @@ class AbaDoBanco(ttk.Frame):
              "Volta para a página com todas as amostras. O que foi editado "
              "aqui já está gravado."
              ).pack(side="left")
-        ttk.Label(topo, text=amostra["nome"], style=app.estilo("Secao.TLabel"),
-                  font=("Segoe UI", 14, "bold")).pack(side="left", padx=(14, 0))
         dica(ttk.Button(topo, text="Excluir amostra", style=app.estilo("Perigo.TButton"),
                         command=lambda: self.excluir_amostra(amostra_id)),
              "Apaga esta amostra do banco, com as informações e todas as "
@@ -917,6 +919,13 @@ class AbaDoBanco(ttk.Frame):
              "Troca o nome da amostra. É por ele que o mapeamento e a lista "
              "de amostras a encontram."
              ).pack(side="right", padx=6)
+        # o nome entra DEPOIS dos botões: no pack, quem chega primeiro
+        # garante o espaço, e um nome comprido empurrava os botões pra
+        # fora da janela. Assim ele fica com o que sobra e quebra a linha.
+        titulo = ttk.Label(topo, text=amostra["nome"], style=app.estilo("Secao.TLabel"),
+                           font=("Segoe UI", 14, "bold"))
+        titulo.pack(side="left", fill="x", expand=True, padx=(14, 6))
+        titulo.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(100, e.width)))
         self._nome_aberto = amostra["nome"]
 
         # as informações: uma caixa por categoria

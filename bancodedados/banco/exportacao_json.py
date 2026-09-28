@@ -18,6 +18,12 @@
             "Rh": {...},
             "Au": {...}
         },
+        "medicoes": {
+            "Ag": {"tubo": "Ag", "arquivo": "061025ab", "grandeza": "Área",
+                   "unidade": "cps", "limite_traco": 10.0, "descartados": ["Ag"],
+                   "tipo_grafico": "Pizza", "data": "..."},
+            ...
+        },
         "arquivos": {"Ag": "061025ab", "Rh": "150725ab", "Au": "220725ab"},
         "imagem": "dados/imagem-madeira/M003.png",
         "espectros": {
@@ -32,7 +38,7 @@
     }
 
 As chaves fixas (id, filename, tecnica, nome, rotulo, elementos,
-arquivos, imagem, espectros, graficos) são as mesmas em qualquer banco; o que
+medicoes, arquivos, imagem, espectros, graficos) são as mesmas em qualquer banco; o que
 muda de um banco para outro são as categorias, que entram entre
 "rotulo" e "elementos" com o nome que têm na planilha.
 
@@ -96,7 +102,7 @@ def montar_entradas(banco):
         amostra_id, nome = resumo["id"], resumo["nome"]
         medicoes = banco.medicoes(amostra_id)
 
-        elementos, arquivos, espectros, graficos = {}, {}, {}, {}
+        elementos, arquivos, espectros, graficos, info = {}, {}, {}, {}, {}
         # os .mca da amostra, pelo código do arquivo: é assim que cada
         # um encontra a medição (o .txt) da mesma medida
         mcas = {e["codigo"].lower(): e for e in banco.espectros(amostra_id)}
@@ -112,7 +118,20 @@ def montar_entradas(banco):
                         for simbolo, v in valores.items()}
                 for grupo, valores in grupos.items()}
             arquivos[chave] = m["codigo"]
-            base = nome_de_arquivo(m["codigo"] or "%s-%d" % (nome, m["id"]))
+            # em que condições cada medida foi classificada: sem isso,
+            # "Majoritários"/"Traço" de dois tubos não se comparam
+            info[chave] = {
+                "tubo": m["tubo"],
+                "arquivo": m["codigo"],
+                "grandeza": m["grandeza"],
+                "unidade": m["unidade"],
+                "limite_traco": m["limite"],
+                "descartados": [s.strip() for s in (m["descartados"] or "").split(",")
+                                if s.strip()],
+                "tipo_grafico": m["tipo_grafico"],
+                "data": m["criado_em"],
+            }
+            base =nome_de_arquivo(m["codigo"] or "%s-%d" % (nome, m["id"]))
             pasta = _pasta_do_tubo(m["simbolo"])
             if m["tem_imagem"]:
                 caminho = "dados/graficos/%s/%s/%s_%s.png" % (sigla.lower(), pasta, base, pasta)
@@ -157,11 +176,12 @@ def montar_entradas(banco):
             # uma categoria com o nome de uma chave fixa não pode
             # atropelá-la: ganha um sufixo
             chave = categoria
-            while chave in entrada or chave in ("elementos", "arquivos", "imagem",
-                                                "espectros", "graficos"):
+            while chave in entrada or chave in ("elementos", "medicoes", "arquivos",
+                                                "imagem", "espectros", "graficos"):
                 chave += " (categoria)"
             entrada[chave] = valor
         entrada["elementos"] = elementos
+        entrada["medicoes"] = info
         entrada["arquivos"] = arquivos
         entrada["imagem"] = imagem
         entrada["espectros"] = espectros

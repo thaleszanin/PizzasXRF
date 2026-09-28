@@ -215,11 +215,6 @@ class SampleCard:
         self.toggle_btn.pack(side="left", padx=(0, 6))
         app.dicas.registrar(self.toggle_btn, "Minimiza o cartão, deixando só esta "
                             "linha — ou expande de volta.")
-        self.name_label = ttk.Label(header, text=self.display_name,
-                                    style=app.estilo("Titulo.TLabel"))
-        self.name_label.pack(side="left")
-        ttk.Label(header, text=f"   arquivo: {sample['code']}",
-                  style=app.estilo("Fraco.TLabel")).pack(side="left")
         dica = app.dicas.registrar
         dica(ttk.Button(header, text="Remover",
                         style=app.estilo("Cartao.Neutro.TButton"),
@@ -238,6 +233,30 @@ class SampleCard:
              "Salva os três gráficos desta amostra num .png, no tamanho "
              "padrão (não depende da largura da janela)."
              ).pack(side="right")
+
+        # o limite do traço SÓ desta amostra. Nasce com o do slider, e o
+        # slider, quando mexido, põe o valor dele de volta em todas
+        ttk.Label(header, text="%", style=app.estilo("Fraco.TLabel")
+                  ).pack(side="right", padx=(2, 14))
+        self.limite_var = tk.StringVar(value=f"{app.limite_de(sample):.1f}")
+        limite = ttk.Spinbox(header, from_=1, to=50, increment=0.5, width=5,
+                             textvariable=self.limite_var, command=self._limite_digitado,
+                             style=app.estilo("TSpinbox"))
+        limite.pack(side="right")
+        limite.bind("<Return>", self._limite_digitado)
+        limite.bind("<FocusOut>", self._limite_digitado)
+        dica(limite, "Limite do grupo traço só desta amostra. O slider lá em cima "
+             "muda o de todas de uma vez (e desfaz os ajustes individuais).")
+        ttk.Label(header, text="Traço:", style=app.estilo("Fraco.TLabel")
+                  ).pack(side="right", padx=(0, 4))
+
+        # o nome entra por ÚLTIMO: no pack, quem chega primeiro garante o
+        # espaço, e um nome comprido empurrava os botões pra fora do cartão
+        self.name_label = ttk.Label(header, text=self.display_name,
+                                    style=app.estilo("Titulo.TLabel"))
+        self.name_label.pack(side="left")
+        ttk.Label(header, text=f"   arquivo: {sample['code']}",
+                  style=app.estilo("Fraco.TLabel")).pack(side="left")
 
         # o espaço do gráfico já nasce do tamanho exato da figura: assim o
         # cartão não muda de tamanho quando o gráfico aparece, e o widget
@@ -341,6 +360,8 @@ class SampleCard:
         kept, removed = apply_exclusions(self.sample["elements"], tube_z)
         major, trace, total = classify(kept, threshold)
         self._dados = (kept, major, trace, total)
+        if self.montado:
+            self.limite_var.set(f"{threshold:.1f}")
 
         if display_name != self.display_name:
             self.display_name = display_name
@@ -373,6 +394,26 @@ class SampleCard:
                 self.app.medir_cartao(self)
         if not self.montado:
             self._reservar_altura()
+
+    def _limite_digitado(self, event=None):
+        """O limite do traço desta amostra mudou na caixinha do cartão."""
+        atual = self.app.limite_de(self.sample)
+        try:
+            valor = float(self.limite_var.get().strip().replace(",", "."))
+        except ValueError:
+            self.limite_var.set(f"{atual:.1f}")
+            return
+        valor = max(1.0, min(50.0, valor))
+        self.limite_var.set(f"{valor:.1f}")
+        if valor == atual:
+            return
+        if valor == self.app.threshold:
+            self.sample.pop("limite", None)   # voltou a seguir o slider
+        else:
+            self.sample["limite"] = valor
+        # só este cartão muda de estado; os outros saem na hora do
+        # `update_data`, então o refresh geral não custa nada a mais
+        self.app.refresh()
 
     @property
     def tem_aviso(self):
@@ -1208,10 +1249,22 @@ class App(tk.Tk):
         self.threshold = float(value)
         self.threshold_label.config(text=f"{self.threshold:.1f}%")
         self.threshold_entry_var.set(f"{self.threshold:.1f}")
+        self._limite_para_todas()
 
         if self._render_after_id is not None:
             self.after_cancel(self._render_after_id)
         self._render_after_id = self.after(200, self._debounced_render)
+
+    def _limite_para_todas(self):
+        """O slider geral manda em todas: os ajustes individuais de cada
+        cartão são desfeitos e todas passam a seguir o valor dele."""
+        for sample in self.samples:
+            sample.pop("limite", None)
+
+    def limite_de(self, sample):
+        """O limite do traço que vale pra esta amostra: o dela, se foi
+        ajustado no cartão, senão o do slider."""
+        return sample.get("limite", self.threshold)
 
     def _debounced_render(self):
         self._render_after_id = None
@@ -1239,6 +1292,7 @@ class App(tk.Tk):
         self.threshold = value
         self.threshold_label.config(text=f"{self.threshold:.1f}%")
         self.threshold_entry_var.set(f"{self.threshold:.1f}")
+        self._limite_para_todas()
 
         if self._render_after_id is not None:
             self.after_cancel(self._render_after_id)
@@ -1297,7 +1351,7 @@ class App(tk.Tk):
         agora. É barato (milissegundos), então quem exporta recalcula em
         vez de depender do que o cartão tem guardado."""
         kept, removed = apply_exclusions(sample["elements"], self.tube_z)
-        major, trace, total = classify(kept, self.threshold)
+        major, trace, total = classify(kept, self.limite_de(sample))
         return kept, removed, major, trace, total
 
     def png_da_amostra(self, sample):
@@ -1315,7 +1369,7 @@ class App(tk.Tk):
         return bloco_da_amostra(
             self.display_name_for(sample), sample["code"],
             linhas_da_tabela(major, trace, total, self.fonte["formatar"]), total,
-            self.threshold, self.tube_var.get(),
+            self.limite_de(sample), self.tube_var.get(),
             [e["symbol"] for e in removed],
             self.fonte["grandeza"], self.unidade, self.fonte["formatar"])
 
@@ -1514,7 +1568,11 @@ class App(tk.Tk):
 
         if compilado:
             try:
-                texto = documento_compilado(blocos, self.threshold, self.tube_var.get(),
+                # limites diferentes entre as amostras: o cabeçalho geral
+                # não tem um número só pra dar, e cada bloco traz o seu
+                limites = {self.limite_de(s) for s in amostras}
+                limite = limites.pop() if len(limites) == 1 else None
+                texto = documento_compilado(blocos, limite, self.tube_var.get(),
                                             bool(self.name_mapping), self._nome_da_fonte())
                 arquivos.append(escrever_texto(
                     caminho_livre(pasta, "todas as amostras", ".txt"), texto))
@@ -1748,7 +1806,7 @@ class App(tk.Tk):
                 amostra_id, _ = banco.obter_ou_criar_amostra(nome)
                 _, nova = banco.guardar_medicao(
                     amostra_id, tubo, sample["code"],
-                    leituras_classificadas(kept, removed, major, trace), self.threshold,
+                    leituras_classificadas(kept, removed, major, trace), self.limite_de(sample),
                     tabela=bloco, imagem=imagem,
                     grandeza=self.fonte["grandeza"], unidade=self.unidade,
                     tipo_grafico=self.tipo, descartados=[e["symbol"] for e in removed])
@@ -1928,7 +1986,8 @@ class App(tk.Tk):
         """Atualiza a parte barata de todos os cartões (nome, avisos,
         altura da tabela) e agenda o desenho dos que ficaram vencidos."""
         for card in self.cards:
-            card.update_data(self.tube_z, self.threshold, self.display_name_for(card.sample))
+            card.update_data(self.tube_z, self.limite_de(card.sample),
+                             self.display_name_for(card.sample))
         if desenhar:
             self._schedule_draw()
 

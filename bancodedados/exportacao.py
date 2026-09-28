@@ -113,7 +113,8 @@ def bloco_da_amostra(nome, codigo, linhas, total, limite, tubo, descartados,
 
 def documento_compilado(blocos, limite, tubo, mapeamento_usado, fonte=None):
     """Um arquivo só com a tabela de todas as amostras, uma embaixo da
-    outra."""
+    outra. `limite` None quer dizer que ele varia de amostra pra amostra
+    (o bloco de cada uma diz o seu)."""
     separador = "=" * 74
     cabecalho = [
         separador,
@@ -124,7 +125,8 @@ def documento_compilado(blocos, limite, tubo, mapeamento_usado, fonte=None):
         cabecalho.append(f"Fonte dos dados: {fonte}")
     cabecalho += [
         f"Tubo de raios X: {tubo}",
-        f"Limite do grupo traço: {limite:.1f}%",
+        "Limite do grupo traço: " + ("varia por amostra (veja cada uma)"
+                                     if limite is None else f"{limite:.1f}%"),
         "Nomes das amostras: %s" % ("do arquivo de mapeamento" if mapeamento_usado
                                     else "código do arquivo (sem mapeamento carregado)"),
         "",
